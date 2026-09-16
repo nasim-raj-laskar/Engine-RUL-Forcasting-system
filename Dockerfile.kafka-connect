@@ -1,0 +1,9 @@
+# Kafka Connect image with Solace PubSub+ Connector pre-installed
+FROM confluentinc/cp-kafka-connect:7.6.0
+
+# Install the Solace PubSub+ Kafka Connector from Confluent Hub
+# This provides SolaceSourceConnector for bridging Solace → Kafka
+RUN confluent-hub install --no-prompt solacesystems/pubsubplus-connector-kafka:2.2.0
+
+# The connector JARs are placed in /usr/share/confluent-hub-components/
+# which is the default CONNECT_PLUGIN_PATH
