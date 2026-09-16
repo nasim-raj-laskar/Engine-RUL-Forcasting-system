@@ -98,7 +98,7 @@ flowchart TB
 
 ## 🚀 Quick Start
 
-### Option A — Full Docker Stack (recommended)
+### Option A — Core Docker Stack (lightweight, recommended)
 
 ```bash
 git clone https://github.com/nasim-raj-laskar/Real-Time-Aircraft-Engine-Predictive-Maintenance-System.git
@@ -107,17 +107,35 @@ cd Real-Time-Aircraft-Engine-Predictive-Maintenance-System
 cp .env.example .env
 # Fill in: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_S3_BUCKET, DAGSHUB_TOKEN, MLFLOW_TRACKING_URI
 
+# Core only — API + Redis + Producer + Consumer + Dashboard (~2.4GB RAM)
 docker compose up -d
 ```
 
-| Service | URL |
-|---------|-----|
-| **Dashboard** | http://localhost:5173 |
-| **Inference API** | http://localhost:8000 |
-| **Prometheus** | http://localhost:9090 |
-| **Grafana** | http://localhost:3000 (admin/admin) |
-| **Solace Manager** | http://localhost:8080 |
-| **Flink Web UI** | http://localhost:8082 |
+All services have **CPU and memory limits** — no more runaway resource usage.
+
+### Docker Compose Profiles
+
+```bash
+# Full streaming pipeline — adds Kafka, Flink, Solace
+docker compose --profile streaming up -d
+
+# Monitoring stack — adds Prometheus, Grafana, exporters
+docker compose --profile monitoring up -d
+
+# Everything
+docker compose --profile streaming --profile monitoring up -d
+```
+
+| Service | URL | Profile |
+|---------|-----|---------|
+| **Dashboard** | http://localhost:5173 | core |
+| **Inference API** | http://localhost:8000 | core |
+| **Prometheus** | http://localhost:9090 | monitoring |
+| **Grafana** | http://localhost:3000 (admin/admin) | monitoring |
+| **Solace Manager** | http://localhost:8080 | streaming |
+| **Kafka** | localhost:29092 | streaming |
+| **Kafka Connect** | http://localhost:8083 | streaming |
+| **Flink Web UI** | http://localhost:8082 | streaming |
 
 ### Option B — ML Pipeline Only
 
@@ -134,7 +152,7 @@ python main.py
 python -m streaming.pipeline.standalone_consumer
 
 # Terminal 2 — producer (throttle once per round of 100 engines)
-python -m streaming.producer.telemetry_producer --throttle 50
+python -m streaming.producer.telemetry_producer --throttle 200
 ```
 
 ### Option D — Frontend Dev Server

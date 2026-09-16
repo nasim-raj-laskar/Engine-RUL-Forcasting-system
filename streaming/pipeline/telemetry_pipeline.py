@@ -1,17 +1,24 @@
 """
 PyFlink entry point for the Aircraft Telemetry Feature Pipeline.
 
-Two source modes (auto-detected via env vars):
-  - Solace PubSub+  : set SOLACE_HOST — uses solace-pubsubplus Python SDK (no JAR needed)
-  - Redis Streams   : default (no broker needed) — reads from telemetry:stream
+Architecture (new):
+    Producer → Solace → Kafka Connector → Kafka → PyFlink KafkaSource → Redis + S3
 
-Run (Flink cluster):
+Source modes (selected via --source flag or env vars):
+    - kafka  : KafkaSource consuming from 'telemetry.raw' topic (production default)
+    - redis  : Redis Streams one-shot batch (development fallback)
+
+Run (Flink cluster — production):
     flink run -py streaming/pipeline/telemetry_pipeline.py \\
-              --parallelism 4 \\
-              -pyfs streaming/
+              --parallelism 3 \\
+              -pyfs /app \\
+              -pyexec /app/.venv/bin/python3
 
-Run (local mini-cluster, no Flink install needed):
-    python -m streaming.pipeline.telemetry_pipeline
+Run (local mini-cluster — development):
+    python -m streaming.pipeline.telemetry_pipeline --local --source redis
+
+Validate (no JVM needed):
+    python -m streaming.pipeline.telemetry_pipeline --dry-run
 """
 
 import os
@@ -22,6 +29,7 @@ from pyflink.datastream import StreamExecutionEnvironment, CheckpointingMode
 from pyflink.datastream.functions import MapFunction, KeyedProcessFunction, RuntimeContext
 from pyflink.datastream.state import ListStateDescriptor, ValueStateDescriptor
 from pyflink.common.typeinfo import Types
+from pyflink.common.serialization import SimpleStringSchema
 
 from streaming.model.engine_event import EngineEvent, SENSOR_NAMES
 from streaming.model.feature_vector import FeatureVector
@@ -129,11 +137,42 @@ class S3CheckpointSink(MapFunction):
             print(f"[s3-sink] Flushed {n} records to Parquet")
         return fv
 
-# -- Redis Streams source -----------------------------------------------------
-# NOTE: Solace → Redis is handled by the standalone_consumer (solace-pubsubplus
-# Python SDK works perfectly there). PyFlink reads from Redis Streams because
-# env.from_collection() with a blocking generator is evaluated at submission
-# time in PyFlink 2.0, which deadlocks before the job graph is ever built.
+
+# -- KafkaSource builder ------------------------------------------------------
+
+def _build_kafka_source(env: StreamExecutionEnvironment):
+    """Build a KafkaSource that continuously reads from the telemetry.raw topic.
+
+    Uses the flink-connector-kafka JAR which must be on the Flink classpath.
+    Offsets are committed on checkpoint — provides exactly-once with idempotent
+    Redis writes downstream.
+    """
+    from pyflink.datastream.connectors.kafka import KafkaSource, KafkaOffsetsInitializer
+
+    bootstrap = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
+    topic = os.getenv("KAFKA_TOPIC", "telemetry.raw")
+    group_id = os.getenv("KAFKA_GROUP_ID", "flink-telemetry")
+
+    kafka_source = (
+        KafkaSource.builder()
+        .set_bootstrap_servers(bootstrap)
+        .set_topics(topic)
+        .set_group_id(group_id)
+        .set_starting_offsets(KafkaOffsetsInitializer.committed_offsets())
+        .set_value_only_deserializer(SimpleStringSchema())
+        .build()
+    )
+
+    print(f"[pipeline] KafkaSource: bootstrap={bootstrap} topic={topic} group={group_id}")
+    return env.from_source(
+        kafka_source,
+        watermark_strategy=None,
+        source_name="kafka-telemetry-source",
+        type_info=Types.STRING(),
+    )
+
+
+# -- Redis Streams source (development fallback) ------------------------------
 
 def _redis_event_iter():
     """Fetch one batch of messages from Redis Streams (non-blocking, finite)."""
@@ -148,6 +187,7 @@ def _redis_event_iter():
 
 
 def _build_redis_stream_source(env: StreamExecutionEnvironment):
+    print("[pipeline] Redis Streams source (development fallback — finite batch)")
     return (
         env.from_collection(list(_redis_event_iter()), type_info=Types.STRING())
         .name("redis-stream-source")
@@ -157,33 +197,54 @@ def _build_redis_stream_source(env: StreamExecutionEnvironment):
 
 # -- Pipeline builder ---------------------------------------------------------
 
-def build_pipeline(local: bool = False) -> None:
+def build_pipeline(local: bool = False, source: str = "kafka") -> None:
     env = StreamExecutionEnvironment.get_execution_environment()
 
-    # Checkpointing -- every 30s, exactly-once
-    env.enable_checkpointing(30_000)
+    # -- Checkpointing --------------------------------------------------------
+    checkpoint_interval = int(os.getenv("FLINK_CHECKPOINT_INTERVAL", "60000"))
+    env.enable_checkpointing(checkpoint_interval)
     env.get_checkpoint_config().set_checkpointing_mode(CheckpointingMode.EXACTLY_ONCE)
-    env.get_checkpoint_config().set_min_pause_between_checkpoints(10_000)
+    env.get_checkpoint_config().set_min_pause_between_checkpoints(30_000)
+    env.get_checkpoint_config().set_checkpoint_timeout(120_000)
+    env.get_checkpoint_config().set_max_concurrent_checkpoints(1)
     env.get_checkpoint_config().set_tolerable_checkpoint_failure_number(2)
 
-    # RocksDB state backend for production (heap is fine for local dev)
-    if not local:
-        checkpoint_dir = os.getenv("FLINK_CHECKPOINT_DIR")
-        if checkpoint_dir:
-            try:
-                from pyflink.datastream.state_backend import RocksDBStateBackend
-                env.set_state_backend(RocksDBStateBackend(checkpoint_dir, incremental_checkpoints=True))
-            except Exception as e:
-                print(f"[pipeline] RocksDB backend unavailable, using heap: {e}")
+    # -- Restart strategy -----------------------------------------------------
+    from pyflink.datastream import RestartStrategies
+    try:
+        env.set_restart_strategy(RestartStrategies.fixed_delay_restart(3, 10_000))
+    except Exception:
+        pass  # RestartStrategies API may differ across Flink versions
 
-    parallelism = int(os.getenv("FLINK_PARALLELISM", "4" if not local else "1"))
+    # -- State backend --------------------------------------------------------
+    if not local:
+        try:
+            from pyflink.datastream.state_backend import EmbeddedRocksDBStateBackend
+            env.set_state_backend(EmbeddedRocksDBStateBackend())
+            print("[pipeline] State backend: EmbeddedRocksDBStateBackend")
+        except Exception as e:
+            print(f"[pipeline] RocksDB backend unavailable, using heap: {e}")
+
+    # -- Parallelism ----------------------------------------------------------
+    parallelism = int(os.getenv("FLINK_PARALLELISM", "3" if not local else "1"))
     env.set_parallelism(parallelism)
 
+    # -- Kafka connector JAR (needed for KafkaSource) -------------------------
+    if source == "kafka":
+        jar_dir = Path(os.getenv("FLINK_HOME", "/opt/flink")) / "lib"
+        kafka_jars = list(jar_dir.glob("flink-connector-kafka*.jar"))
+        if kafka_jars:
+            jar_urls = [f"file://{jar}" for jar in kafka_jars]
+            env.add_jars(*jar_urls)
+            print(f"[pipeline] Loaded Kafka connector JARs: {[j.name for j in kafka_jars]}")
+        else:
+            print(f"[pipeline] WARNING: No flink-connector-kafka JAR found in {jar_dir}")
+
     # -- Source ---------------------------------------------------------------
-    # Always read from Redis Streams. When SOLACE_HOST is set, the standalone
-    # consumer bridges Solace → Redis so data flows end-to-end.
-    print("[pipeline] Reading from Redis Streams source")
-    raw_stream = _build_redis_stream_source(env)
+    if source == "kafka":
+        raw_stream = _build_kafka_source(env)
+    else:
+        raw_stream = _build_redis_stream_source(env)
 
     # -- Stage 1: Normalize (stateless) ---------------------------------------
     normalized = (
@@ -222,6 +283,8 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Aircraft Telemetry PyFlink Pipeline")
     parser.add_argument("--local", action="store_true", help="Run in local mini-cluster mode")
+    parser.add_argument("--source", choices=["kafka", "redis"], default="redis",
+                        help="Source to read from (default: redis for local dev, kafka for cluster)")
     parser.add_argument("--dry-run", action="store_true", help="Validate components without Flink JVM")
     args = parser.parse_args()
 
@@ -249,4 +312,8 @@ if __name__ == "__main__":
         print(f"[dry-run] Redis key: {fv.redis_feature_key}")
         print("[dry-run] All pipeline components validated successfully.")
     else:
-        build_pipeline(local=args.local)
+        # Default source for cluster mode is kafka
+        source = args.source
+        if not args.local and source == "redis" and os.getenv("KAFKA_BOOTSTRAP_SERVERS"):
+            source = "kafka"
+        build_pipeline(local=args.local, source=source)
