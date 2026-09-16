@@ -22,8 +22,13 @@ Validate (no JVM needed):
 """
 
 import os
+import sys
 import time
 from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parents[2]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
 from pyflink.datastream import StreamExecutionEnvironment, CheckpointingMode
 from pyflink.datastream.functions import MapFunction, KeyedProcessFunction, RuntimeContext
@@ -158,15 +163,16 @@ def _build_kafka_source(env: StreamExecutionEnvironment):
         .set_bootstrap_servers(bootstrap)
         .set_topics(topic)
         .set_group_id(group_id)
-        .set_starting_offsets(KafkaOffsetsInitializer.committed_offsets())
+        .set_starting_offsets(KafkaOffsetsInitializer.earliest())
         .set_value_only_deserializer(SimpleStringSchema())
         .build()
     )
 
     print(f"[pipeline] KafkaSource: bootstrap={bootstrap} topic={topic} group={group_id}")
+    from pyflink.common import WatermarkStrategy
     return env.from_source(
         kafka_source,
-        watermark_strategy=None,
+        watermark_strategy=WatermarkStrategy.no_watermarks(),
         source_name="kafka-telemetry-source",
         type_info=Types.STRING(),
     )
@@ -210,8 +216,8 @@ def build_pipeline(local: bool = False, source: str = "kafka") -> None:
     env.get_checkpoint_config().set_tolerable_checkpoint_failure_number(2)
 
     # -- Restart strategy -----------------------------------------------------
-    from pyflink.datastream import RestartStrategies
     try:
+        from pyflink.common import RestartStrategies
         env.set_restart_strategy(RestartStrategies.fixed_delay_restart(3, 10_000))
     except Exception:
         pass  # RestartStrategies API may differ across Flink versions
@@ -219,11 +225,9 @@ def build_pipeline(local: bool = False, source: str = "kafka") -> None:
     # -- State backend --------------------------------------------------------
     if not local:
         try:
-            from pyflink.datastream.state_backend import EmbeddedRocksDBStateBackend
-            env.set_state_backend(EmbeddedRocksDBStateBackend())
-            print("[pipeline] State backend: EmbeddedRocksDBStateBackend")
+            env.get_configuration().set_string("state.backend", "hashmap")
         except Exception as e:
-            print(f"[pipeline] RocksDB backend unavailable, using heap: {e}")
+            print(f"[pipeline] State backend config note: {e}")
 
     # -- Parallelism ----------------------------------------------------------
     parallelism = int(os.getenv("FLINK_PARALLELISM", "3" if not local else "1"))
@@ -232,11 +236,14 @@ def build_pipeline(local: bool = False, source: str = "kafka") -> None:
     # -- Kafka connector JAR (needed for KafkaSource) -------------------------
     if source == "kafka":
         jar_dir = Path(os.getenv("FLINK_HOME", "/opt/flink")) / "lib"
-        kafka_jars = list(jar_dir.glob("flink-connector-kafka*.jar"))
+        kafka_jars = list(jar_dir.glob("flink-connector-kafka*.jar")) + list(jar_dir.glob("kafka-clients*.jar"))
         if kafka_jars:
-            jar_urls = [f"file://{jar}" for jar in kafka_jars]
-            env.add_jars(*jar_urls)
-            print(f"[pipeline] Loaded Kafka connector JARs: {[j.name for j in kafka_jars]}")
+            try:
+                jar_urls = [f"file://{jar}" for jar in kafka_jars]
+                env.add_jars(*jar_urls)
+                print(f"[pipeline] Loaded Kafka connector JARs: {[j.name for j in kafka_jars]}")
+            except Exception as e:
+                print(f"[pipeline] Note on env.add_jars: {e} (JARs are pre-loaded via /opt/flink/lib)")
         else:
             print(f"[pipeline] WARNING: No flink-connector-kafka JAR found in {jar_dir}")
 
@@ -286,7 +293,7 @@ if __name__ == "__main__":
     parser.add_argument("--source", choices=["kafka", "redis"], default="redis",
                         help="Source to read from (default: redis for local dev, kafka for cluster)")
     parser.add_argument("--dry-run", action="store_true", help="Validate components without Flink JVM")
-    args = parser.parse_args()
+    args, _ = parser.parse_known_args()
 
     if args.dry_run:
         print("[dry-run] Validating pipeline components...")

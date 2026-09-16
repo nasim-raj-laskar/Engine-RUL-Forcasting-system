@@ -1,9 +1,15 @@
-# Kafka Connect image with Solace PubSub+ Connector pre-installed
+# Kafka Connect image with Solace PubSub+ Source Connector pre-installed
 FROM confluentinc/cp-kafka-connect:7.6.0
 
-# Install the Solace PubSub+ Kafka Connector from Confluent Hub
-# This provides SolaceSourceConnector for bridging Solace → Kafka
-RUN confluent-hub install --no-prompt solacesystems/pubsubplus-connector-kafka:2.2.0
+# Download the Solace Kafka Source Connector and its self-contained runtime dependencies
+# from Maven Central. Place them in the Kafka Connect plugin path.
+RUN mkdir -p /usr/share/confluent-hub-components/solace-source-connector/lib \
+    && curl -fSL -o /usr/share/confluent-hub-components/solace-source-connector/lib/pubsubplus-connector-kafka-source-2.3.0.jar \
+       "https://repo1.maven.org/maven2/com/solace/connector/kafka/connect/pubsubplus-connector-kafka-source/2.3.0/pubsubplus-connector-kafka-source-2.3.0.jar" \
+    && curl -fSL -o /usr/share/confluent-hub-components/solace-source-connector/lib/sol-jcsmp-10.15.0.jar \
+       "https://repo1.maven.org/maven2/com/solacesystems/sol-jcsmp/10.15.0/sol-jcsmp-10.15.0.jar" \
+    && curl -fSL -o /usr/share/confluent-hub-components/solace-source-connector/lib/jzlib-1.0.7_2.jar \
+       "https://repo1.maven.org/maven2/org/apache/servicemix/bundles/org.apache.servicemix.bundles.jzlib/1.0.7_2/org.apache.servicemix.bundles.jzlib-1.0.7_2.jar" \
+    && echo "[dockerfile] Downloaded Solace Kafka Source Connector 2.3.0 + JCSMP 10.15.0"
 
-# The connector JARs are placed in /usr/share/confluent-hub-components/
-# which is the default CONNECT_PLUGIN_PATH
+# The connector JARs are discovered via CONNECT_PLUGIN_PATH=/usr/share/confluent-hub-components

@@ -168,28 +168,28 @@ services:
       username_admin_globalaccesslevel: admin
       username_admin_password: admin
       system_scaling_maxconnectioncount: "20"
-    shm_size: "256m"
+    shm_size: "1g"
     ulimits:
       core: -1
       nofile:
-        soft: 65536
-        hard: 65536
+        soft: 1048576
+        hard: 1048576
     volumes:
       - solace-data:/var/lib/solace
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8080/SEMP/v2/config"]
+      test: ["CMD-SHELL", "curl -sf -u admin:admin http://localhost:8080/SEMP/v2/config || exit 1"]
       interval: 30s
       timeout: 15s
       retries: 15
-      start_period: 120s
+      start_period: 180s
     restart: unless-stopped
     deploy:
       resources:
         limits:
           cpus: "1.0"
-          memory: 1G
+          memory: 3G
         reservations:
-          memory: 512M
+          memory: 2560M
     networks:
       - aircraft-network
 
@@ -238,7 +238,7 @@ services:
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       # Cluster
-      CLUSTER_ID: "aircraft-engine-kafka-cluster"
+      CLUSTER_ID: "zR5so4fbRX6qwmt85seisQ"
       # Topic defaults
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
       KAFKA_NUM_PARTITIONS: 3
@@ -347,7 +347,9 @@ services:
 
   # Flink JobManager
   flink-jobmanager:
-    image: flink:2.0-scala_2.12-java17
+    build:
+      context: .
+      dockerfile: Dockerfile.streaming
     container_name: aircraft-flink-jobmanager
     profiles: ["streaming"]
     ports:
@@ -360,10 +362,8 @@ services:
         execution.checkpointing.interval: 60000
         state.backend: hashmap
         state.checkpoints.dir: file:///tmp/flink-checkpoints
-        python.executable: python3
-        jobmanager.memory.process.size: 512m
-    volumes:
-      - flink-jars:/opt/flink/lib/extra
+        python.executable: /app/.venv/bin/python3
+        jobmanager.memory.process.size: 768m
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8081/overview"]
       interval: 20s
@@ -375,28 +375,32 @@ services:
       resources:
         limits:
           cpus: "0.5"
-          memory: 768M
+          memory: 1G
         reservations:
-          memory: 256M
+          memory: 512M
     networks:
       - aircraft-network
 
   #  Flink TaskManager
   flink-taskmanager:
-    image: flink:2.0-scala_2.12-java17
+    build:
+      context: .
+      dockerfile: Dockerfile.streaming
     container_name: aircraft-flink-taskmanager
     profiles: ["streaming"]
     command: taskmanager
     environment:
+      PYTHONPATH: /app
       FLINK_PROPERTIES: |
         jobmanager.rpc.address: flink-jobmanager
         taskmanager.numberOfTaskSlots: 3
         taskmanager.memory.process.size: 1280m
         state.backend: hashmap
         state.checkpoints.dir: file:///tmp/flink-checkpoints
-        python.executable: python3
+        python.executable: /app/.venv/bin/python3
     volumes:
-      - flink-jars:/opt/flink/lib/extra
+      - ./streaming:/app/streaming:ro
+      - ./config:/app/config:ro
     depends_on:
       flink-jobmanager:
         condition: service_healthy
@@ -419,6 +423,9 @@ services:
     container_name: aircraft-flink-submitter
     profiles: ["streaming"]
     env_file: .env
+    volumes:
+      - ./streaming:/app/streaming:ro
+      - ./config:/app/config:ro
     command:
       - bash
       - -c
@@ -427,20 +434,22 @@ services:
         until curl -sf http://flink-jobmanager:8081/overview; do sleep 3; done &&
         echo '[submitter] Waiting for Kafka broker...' &&
         until python3 -c "
-        from kafka import KafkaConsumer
-        c = KafkaConsumer(bootstrap_servers='kafka:9092')
-        c.topics()
-        c.close()
+        import socket
+        s = socket.create_connection(('kafka', 9092), timeout=3)
+        s.close()
         print('Kafka OK')
         " 2>/dev/null; do sleep 3; done &&
         echo '[submitter] Submitting PyFlink job with KafkaSource...' &&
         cd /app && flink run -m flink-jobmanager:8081 \
-          -py streaming/pipeline/telemetry_pipeline.py \
-          --parallelism 3 \
+          -p 3 \
           -pyfs /app \
-          -pyexec /app/.venv/bin/python3 &&
+          -pyexec /app/.venv/bin/python3 \
+          -pyclientexec /app/.venv/bin/python3 \
+          -py streaming/pipeline/telemetry_pipeline.py \
+          --source kafka &&
         echo '[submitter] Job submitted successfully.'
     environment:
+      PYTHONPATH: /app
       REDIS_URL: redis://redis:6379/0
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       KAFKA_TOPIC: telemetry.raw

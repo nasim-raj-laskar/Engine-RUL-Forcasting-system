@@ -25,7 +25,7 @@ WORKDIR /app
 
 #Install dependencies
 # Step 1: core streaming deps
-RUN pip install --no-cache-dir boto3 pyarrow redis solace-pubsubplus numpy python-dotenv kafka-python-ng
+RUN pip install --no-cache-dir boto3 pyarrow redis solace-pubsubplus numpy python-dotenv kafka-python-ng ruamel.yaml
 
 # Step 2: apache-beam (required by PyFlink's Python worker pool).
 # Its transitive dep declares redis<5 which conflicts with redis>=7.4.0,
@@ -40,9 +40,9 @@ RUN uv pip install "apache-flink==2.2.1" --no-deps
 
 # Step 4: Download flink-connector-kafka JAR for KafkaSource
 # This JAR must be on the Flink classpath for PyFlink's KafkaSource to work.
-RUN curl -fSL -o /opt/flink/lib/flink-connector-kafka-3.3.0-1.20.jar \
-    "https://repo1.maven.org/maven2/org/apache/flink/flink-connector-kafka/3.3.0-1.20/flink-connector-kafka-3.3.0-1.20.jar" \
-    && echo "[dockerfile] Downloaded flink-connector-kafka-3.3.0-1.20.jar"
+RUN curl -fSL -o /opt/flink/lib/flink-connector-kafka-4.0.1-2.0.jar \
+    "https://repo1.maven.org/maven2/org/apache/flink/flink-connector-kafka/4.0.1-2.0/flink-connector-kafka-4.0.1-2.0.jar" \
+    && echo "[dockerfile] Downloaded flink-connector-kafka-4.0.1-2.0.jar"
 
 # Download kafka-clients JAR (transitive dependency of the connector)
 RUN curl -fSL -o /opt/flink/lib/kafka-clients-3.7.1.jar \
