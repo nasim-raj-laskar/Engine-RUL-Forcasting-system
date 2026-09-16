@@ -1,0 +1,11 @@
+# Kafka configuration for the streaming pipeline
+kafka:
+  bootstrap_servers: kafka:9092
+  topic: telemetry.raw
+  partitions: 3
+  replication_factor: 1
+  retention_ms: 86400000       # 24 hours
+  compression_type: snappy
+  consumer_group: flink-telemetry
+  # External access (from host machine)
+  external_bootstrap: localhost:29092

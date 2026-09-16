@@ -1,0 +1,17 @@
+{
+  "name": "solace-telemetry-source",
+  "config": {
+    "connector.class": "com.solace.connector.kafka.connect.source.SolaceSourceConnector",
+    "tasks.max": "3",
+    "sol.host": "tcp://solace:55555",
+    "sol.username": "admin",
+    "sol.password": "admin",
+    "sol.vpn_name": "default",
+    "sol.topics": "aircraft/engine/+/telemetry/cycle",
+    "sol.queue": "flink.feature.processor",
+    "kafka.topic": "telemetry.raw",
+    "sol.message_processor_class": "com.solace.connector.kafka.connect.source.msgprocessors.SolSampleSimpleMessageProcessor",
+    "value.converter": "org.apache.kafka.connect.converters.ByteArrayConverter",
+    "key.converter": "org.apache.kafka.connect.storage.StringConverter"
+  }
+}

@@ -1,0 +1,14 @@
+# Flink configuration for the streaming pipeline
+flink:
+  checkpoint_interval_ms: 60000     # 60s
+  checkpointing_mode: EXACTLY_ONCE
+  min_pause_between_checkpoints_ms: 30000
+  checkpoint_timeout_ms: 120000
+  max_concurrent_checkpoints: 1
+  tolerable_checkpoint_failures: 2
+  parallelism: 3                    # matches 3 Kafka partitions
+  state_backend: rocksdb            # EmbeddedRocksDBStateBackend
+  restart_strategy:
+    type: fixed-delay
+    attempts: 3
+    delay_ms: 10000
