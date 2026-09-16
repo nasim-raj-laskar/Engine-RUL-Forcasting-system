@@ -1,6 +1,10 @@
 services:
 
-  #  Inference API 
+  # ═══════════════════════════════════════════════════════════════════════════
+  #  CORE SERVICES  (always start — no profile needed)
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  #  Inference API
   inference-api:
     build:
       context: .
@@ -28,10 +32,17 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1536M
+        reservations:
+          memory: 512M
     networks:
       - aircraft-network
 
-  #  Redis (online feature store + stream transport) 
+  #  Redis (online feature store + stream transport)
   redis:
     image: redis:7-alpine
     container_name: aircraft-redis
@@ -39,133 +50,48 @@ services:
       - "6379:6379"
     volumes:
       - redis-data:/data
-    command: redis-server --appendonly yes
+    command: redis-server --appendonly yes --maxmemory 200mb --maxmemory-policy allkeys-lru
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
+      interval: 15s
       timeout: 5s
       retries: 5
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+        reservations:
+          memory: 64M
     networks:
       - aircraft-network
 
-  #  Solace PubSub+ (event broker) 
-  solace:
-    image: solace/solace-pubsub-standard:latest
-    container_name: aircraft-solace
-    hostname: solace
-    ports:
-      - "8080:8080"    # Solace Manager UI
-      - "55555:55555"  # SMF (Flink connector / Python API)
-      - "1883:1883"    # MQTT
-      - "9000:9000"    # REST messaging
-    environment:
-      username_admin_globalaccesslevel: admin
-      username_admin_password: admin
-      system_scaling_maxconnectioncount: "100"
-    shm_size: "1g"
-    ulimits:
-      core: -1
-      nofile:
-        soft: 1048576
-        hard: 1048576
-    volumes:
-      - solace-data:/var/lib/solace
-    healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8080/SEMP/v2/config"]
-      interval: 20s
-      timeout: 15s
-      retries: 15
-      start_period: 120s
-    restart: unless-stopped
-    networks:
-      - aircraft-network
-
-  # Flink JobManager 
-  flink-jobmanager:
-    image: flink:2.0-scala_2.12-java17
-    container_name: aircraft-flink-jobmanager
-    ports:
-      - "8082:8081"    # Flink Web UI
-    command: jobmanager
-    environment:
-      FLINK_PROPERTIES: |
-        jobmanager.rpc.address: flink-jobmanager
-        taskmanager.numberOfTaskSlots: 4
-        execution.checkpointing.interval: 30000
-        state.backend: hashmap
-        state.checkpoints.dir: file:///tmp/flink-checkpoints
-        python.executable: python3
-    volumes:
-      - flink-jars:/opt/flink/lib/extra
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8081/overview"]
-      interval: 15s
-      timeout: 10s
-      retries: 5
-      start_period: 20s
-    restart: unless-stopped
-    networks:
-      - aircraft-network
-
-  #  Flink TaskManager 
-  flink-taskmanager:
-    image: flink:2.0-scala_2.12-java17
-    container_name: aircraft-flink-taskmanager
-    command: taskmanager
-    environment:
-      FLINK_PROPERTIES: |
-        jobmanager.rpc.address: flink-jobmanager
-        taskmanager.numberOfTaskSlots: 4
-        taskmanager.memory.process.size: 2g
-        state.backend: hashmap
-        state.checkpoints.dir: file:///tmp/flink-checkpoints
-        python.executable: python3
-    volumes:
-      - flink-jars:/opt/flink/lib/extra
-    depends_on:
-      flink-jobmanager:
-        condition: service_healthy
-    restart: unless-stopped
-    networks:
-      - aircraft-network
-
-  #  Telemetry Producer — publishes to Solace PubSub+ 
+  #  Telemetry Producer — publishes to Redis Streams (default) or Solace
   telemetry-producer:
     build:
       context: .
       dockerfile: Dockerfile.streaming
     container_name: aircraft-producer
     env_file: .env
-    command: python3 -m streaming.producer.telemetry_producer --dataset artifacts/data_ingestion/data/train_FD001.txt --throttle 50
+    command: python3 -m streaming.producer.telemetry_producer --dataset artifacts/data_ingestion/data/train_FD001.txt --throttle 200
     environment:
       REDIS_URL: redis://redis:6379/0
     depends_on:
       redis:
         condition: service_healthy
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "0.3"
+          memory: 256M
+        reservations:
+          memory: 64M
     networks:
       - aircraft-network
 
-  #  Solace Queue Provisioner (one-shot — runs once after Solace is healthy) 
-  solace-provisioner:
-    image: curlimages/curl:latest
-    container_name: aircraft-solace-provisioner
-    volumes:
-      - ./scripts/provision_solace_queues.sh:/provision.sh:ro
-    entrypoint: ["/bin/sh", "/provision.sh"]
-    environment:
-      SOLACE_HOST: http://solace:8080
-      SOLACE_VPN: default
-      SOLACE_USER: admin
-      SOLACE_PASS: admin
-    depends_on:
-      solace:
-        condition: service_started
-    restart: "no"
-    networks:
-      - aircraft-network
-
+  #  Standalone Consumer — lightweight Python consumer (core profile)
   standalone-consumer:
     build:
       context: .
@@ -187,109 +113,17 @@ services:
       retries: 3
       start_period: 20s
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "0.3"
+          memory: 256M
+        reservations:
+          memory: 64M
     networks:
       - aircraft-network
 
-  flink-job-submitter:
-    build:
-      context: .
-      dockerfile: Dockerfile.streaming
-    container_name: aircraft-flink-submitter
-    env_file: .env
-    command:
-      - bash
-      - -c
-      - |
-        echo '[submitter] Waiting for Flink JobManager...' &&
-        until curl -sf http://flink-jobmanager:8081/overview; do sleep 3; done &&
-        while true; do
-          echo '[submitter] Submitting PyFlink batch job...' &&
-          cd /app && flink run -m flink-jobmanager:8081 -py streaming/pipeline/telemetry_pipeline.py --parallelism 4 -pyfs /app &&
-          echo '[submitter] Batch done. Sleeping 30s...' &&
-          sleep 30
-        done
-    environment:
-      REDIS_URL: redis://redis:6379/0
-      FLINK_HOME: /opt/flink
-      PYFLINK_PYTHON: /app/.venv/bin/python3
-      ENABLE_S3_SINK: "false"
-      FLUSH_EVERY: "500"
-    depends_on:
-      flink-jobmanager:
-        condition: service_healthy
-      solace:
-        condition: service_started
-      redis:
-        condition: service_healthy
-    restart: "no"
-    networks:
-      - aircraft-network
-
-  #  Monitoring 
-  node-exporter:
-    image: prom/node-exporter:latest
-    container_name: aircraft-node-exporter
-    ports:
-      - "9100:9100"
-    volumes:
-      - /proc:/host/proc:ro
-      - /sys:/host/sys:ro
-      - /:/rootfs:ro
-    command:
-      - "--path.procfs=/host/proc"
-      - "--path.sysfs=/host/sys"
-      - "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)"
-    restart: unless-stopped
-    networks:
-      - aircraft-network
-
-  redis-exporter:
-    image: oliver006/redis_exporter:latest
-    container_name: aircraft-redis-exporter
-    ports:
-      - "9121:9121"
-    environment:
-      REDIS_ADDR: redis://redis:6379
-    depends_on:
-      redis:
-        condition: service_healthy
-    restart: unless-stopped
-    networks:
-      - aircraft-network
-
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: aircraft-prometheus
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ./monitoring/prometheus/alerting_rules.yml:/etc/prometheus/alerting_rules.yml:ro
-    restart: unless-stopped
-    networks:
-      - aircraft-network
-
-  grafana:
-    image: grafana/grafana:latest
-    container_name: aircraft-grafana
-    ports:
-      - "3000:3000"
-    environment:
-      GF_SECURITY_ADMIN_USER: admin
-      GF_SECURITY_ADMIN_PASSWORD: admin
-      GF_AUTH_ANONYMOUS_ENABLED: "true"
-      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
-      GF_PATHS_PROVISIONING: /etc/grafana/provisioning
-    volumes:
-      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
-    depends_on:
-      - prometheus
-    restart: unless-stopped
-    networks:
-      - aircraft-network
-
-  #  Frontend Dashboard 
+  #  Frontend Dashboard
   frontend:
     build:
       context: .
@@ -304,6 +138,427 @@ services:
       inference-api:
         condition: service_healthy
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "0.3"
+          memory: 128M
+        reservations:
+          memory: 32M
+    networks:
+      - aircraft-network
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  #  STREAMING PROFILE  (docker compose --profile streaming up)
+  #  Full Kafka-based pipeline: Solace → Kafka → PyFlink → Redis
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  #  Solace PubSub+ (event broker — ingestion boundary)
+  solace:
+    image: solace/solace-pubsub-standard:latest
+    container_name: aircraft-solace
+    hostname: solace
+    profiles: ["streaming"]
+    ports:
+      - "8080:8080"    # Solace Manager UI
+      - "55555:55555"  # SMF (producer publishes here)
+      - "1883:1883"    # MQTT
+      - "9000:9000"    # REST messaging
+    environment:
+      username_admin_globalaccesslevel: admin
+      username_admin_password: admin
+      system_scaling_maxconnectioncount: "20"
+    shm_size: "256m"
+    ulimits:
+      core: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - solace-data:/var/lib/solace
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/SEMP/v2/config"]
+      interval: 30s
+      timeout: 15s
+      retries: 15
+      start_period: 120s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+        reservations:
+          memory: 512M
+    networks:
+      - aircraft-network
+
+  #  Solace Queue Provisioner (one-shot — runs once after Solace is healthy)
+  solace-provisioner:
+    image: curlimages/curl:latest
+    container_name: aircraft-solace-provisioner
+    profiles: ["streaming"]
+    volumes:
+      - ./scripts/provision_solace_queues.sh:/provision.sh:ro
+    entrypoint: ["/bin/sh", "/provision.sh"]
+    environment:
+      SOLACE_HOST: http://solace:8080
+      SOLACE_VPN: default
+      SOLACE_USER: admin
+      SOLACE_PASS: admin
+    depends_on:
+      solace:
+        condition: service_started
+    restart: "no"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.1"
+          memory: 64M
+    networks:
+      - aircraft-network
+
+  #  Kafka (KRaft mode — no ZooKeeper)
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: aircraft-kafka
+    hostname: kafka
+    profiles: ["streaming"]
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      # KRaft mode — single-node broker+controller
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,EXTERNAL://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      # Cluster
+      CLUSTER_ID: "aircraft-engine-kafka-cluster"
+      # Topic defaults
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_NUM_PARTITIONS: 3
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+      KAFKA_MIN_INSYNC_REPLICAS: 1
+      # Retention
+      KAFKA_LOG_RETENTION_MS: 86400000        # 24h
+      KAFKA_LOG_RETENTION_BYTES: -1            # unlimited
+      KAFKA_COMPRESSION_TYPE: snappy
+      # Performance tuning for small machine
+      KAFKA_LOG_SEGMENT_BYTES: 104857600       # 100MB segments
+      KAFKA_LOG_CLEANER_ENABLE: "true"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      # JVM tuning — keep heap small
+      KAFKA_HEAP_OPTS: "-Xmx512m -Xms256m"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092 > /dev/null 2>&1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "0.75"
+          memory: 1G
+        reservations:
+          memory: 512M
+    networks:
+      - aircraft-network
+
+  #  Kafka Connect (Solace Kafka Connector)
+  kafka-connect:
+    build:
+      context: .
+      dockerfile: Dockerfile.kafka-connect
+    container_name: aircraft-kafka-connect
+    hostname: kafka-connect
+    profiles: ["streaming"]
+    ports:
+      - "8083:8083"
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: kafka:9092
+      CONNECT_REST_PORT: 8083
+      CONNECT_REST_ADVERTISED_HOST_NAME: kafka-connect
+      CONNECT_GROUP_ID: aircraft-connect-cluster
+      CONNECT_CONFIG_STORAGE_TOPIC: _connect-configs
+      CONNECT_OFFSET_STORAGE_TOPIC: _connect-offsets
+      CONNECT_STATUS_STORAGE_TOPIC: _connect-status
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_KEY_CONVERTER: org.apache.kafka.connect.storage.StringConverter
+      CONNECT_VALUE_CONVERTER: org.apache.kafka.connect.converters.ByteArrayConverter
+      CONNECT_PLUGIN_PATH: /usr/share/confluent-hub-components
+      # JVM tuning
+      KAFKA_HEAP_OPTS: "-Xmx384m -Xms128m"
+    depends_on:
+      kafka:
+        condition: service_healthy
+      solace:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8083/connectors || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 45s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 768M
+        reservations:
+          memory: 256M
+    networks:
+      - aircraft-network
+
+  #  Kafka Connector Registrar (one-shot — registers Solace connector)
+  kafka-connector-registrar:
+    image: curlimages/curl:latest
+    container_name: aircraft-kafka-connector-registrar
+    profiles: ["streaming"]
+    volumes:
+      - ./scripts/register_kafka_connector.sh:/register.sh:ro
+      - ./config/solace_kafka_connector.json:/config/solace_kafka_connector.json:ro
+    entrypoint: ["/bin/sh", "/register.sh"]
+    depends_on:
+      kafka-connect:
+        condition: service_healthy
+    restart: "no"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.1"
+          memory: 64M
+    networks:
+      - aircraft-network
+
+  # Flink JobManager
+  flink-jobmanager:
+    image: flink:2.0-scala_2.12-java17
+    container_name: aircraft-flink-jobmanager
+    profiles: ["streaming"]
+    ports:
+      - "8082:8081"    # Flink Web UI
+    command: jobmanager
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        taskmanager.numberOfTaskSlots: 3
+        execution.checkpointing.interval: 60000
+        state.backend: hashmap
+        state.checkpoints.dir: file:///tmp/flink-checkpoints
+        python.executable: python3
+        jobmanager.memory.process.size: 512m
+    volumes:
+      - flink-jars:/opt/flink/lib/extra
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/overview"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 768M
+        reservations:
+          memory: 256M
+    networks:
+      - aircraft-network
+
+  #  Flink TaskManager
+  flink-taskmanager:
+    image: flink:2.0-scala_2.12-java17
+    container_name: aircraft-flink-taskmanager
+    profiles: ["streaming"]
+    command: taskmanager
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        taskmanager.numberOfTaskSlots: 3
+        taskmanager.memory.process.size: 1280m
+        state.backend: hashmap
+        state.checkpoints.dir: file:///tmp/flink-checkpoints
+        python.executable: python3
+    volumes:
+      - flink-jars:/opt/flink/lib/extra
+    depends_on:
+      flink-jobmanager:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "0.75"
+          memory: 1536M
+        reservations:
+          memory: 512M
+    networks:
+      - aircraft-network
+
+  #  Flink Job Submitter (one-shot — submits PyFlink job)
+  flink-job-submitter:
+    build:
+      context: .
+      dockerfile: Dockerfile.streaming
+    container_name: aircraft-flink-submitter
+    profiles: ["streaming"]
+    env_file: .env
+    command:
+      - bash
+      - -c
+      - |
+        echo '[submitter] Waiting for Flink JobManager...' &&
+        until curl -sf http://flink-jobmanager:8081/overview; do sleep 3; done &&
+        echo '[submitter] Waiting for Kafka broker...' &&
+        until python3 -c "
+        from kafka import KafkaConsumer
+        c = KafkaConsumer(bootstrap_servers='kafka:9092')
+        c.topics()
+        c.close()
+        print('Kafka OK')
+        " 2>/dev/null; do sleep 3; done &&
+        echo '[submitter] Submitting PyFlink job with KafkaSource...' &&
+        cd /app && flink run -m flink-jobmanager:8081 \
+          -py streaming/pipeline/telemetry_pipeline.py \
+          --parallelism 3 \
+          -pyfs /app \
+          -pyexec /app/.venv/bin/python3 &&
+        echo '[submitter] Job submitted successfully.'
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_TOPIC: telemetry.raw
+      KAFKA_GROUP_ID: flink-telemetry
+      FLINK_HOME: /opt/flink
+      PYFLINK_PYTHON: /app/.venv/bin/python3
+      ENABLE_S3_SINK: "false"
+      FLUSH_EVERY: "500"
+    depends_on:
+      flink-jobmanager:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: "no"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.3"
+          memory: 512M
+        reservations:
+          memory: 128M
+    networks:
+      - aircraft-network
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  #  MONITORING PROFILE  (docker compose --profile monitoring up)
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: aircraft-node-exporter
+    profiles: ["monitoring"]
+    ports:
+      - "9100:9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - "--path.procfs=/host/proc"
+      - "--path.sysfs=/host/sys"
+      - "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)"
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "0.1"
+          memory: 64M
+    networks:
+      - aircraft-network
+
+  redis-exporter:
+    image: oliver006/redis_exporter:latest
+    container_name: aircraft-redis-exporter
+    profiles: ["monitoring"]
+    ports:
+      - "9121:9121"
+    environment:
+      REDIS_ADDR: redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "0.1"
+          memory: 64M
+    networks:
+      - aircraft-network
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: aircraft-prometheus
+    profiles: ["monitoring"]
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus/alerting_rules.yml:/etc/prometheus/alerting_rules.yml:ro
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "0.3"
+          memory: 256M
+        reservations:
+          memory: 128M
+    networks:
+      - aircraft-network
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: aircraft-grafana
+    profiles: ["monitoring"]
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_PATHS_PROVISIONING: /etc/grafana/provisioning
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "0.3"
+          memory: 256M
+        reservations:
+          memory: 128M
     networks:
       - aircraft-network
 
@@ -313,5 +568,6 @@ networks:
 
 volumes:
   redis-data:
+  kafka-data:
   flink-jars:
-  solace-data:  # persists Solace queue config across container restarts
+  solace-data:
