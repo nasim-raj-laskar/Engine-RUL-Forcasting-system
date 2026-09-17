@@ -18,7 +18,7 @@ flowchart LR
     G3 --> D3["Spatial Dropout\nRate = 0.15"]
     D3 --> FC1["Dense Projection\n32 Units · ReLU · L2 (1e-3)"]
     FC1 --> FC2["Dense Compression\n16 Units · ReLU · L2 (1e-3)"]
-    FC2 --> OUT["Sigmoid Unit\n1 Output ∈ [0, 1]"]
+    FC2 --> OUT["Sigmoid Unit\n1 Output ∈ 0 to 1"]
 
     style IN fill:#0369a1,color:#fff
     style OUT fill:#15803d,color:#fff

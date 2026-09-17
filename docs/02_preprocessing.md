@@ -13,7 +13,7 @@ flowchart TD
     A[Raw FD001 Records\n26 Columns · Space-Delimited] --> B[Filter Zero-Variance Sensors\nDrop 10 uninformative channels]
     B --> C[Compute Monotonic RUL\nRUL = max_cycle − current_cycle]
     C --> D[Piecewise Linear Clipping\nSaturate RUL at 125 cycles]
-    D --> E[Global MinMax Scaling\nFit on Train only → [0, 1]]
+    D --> E["Global MinMax Scaling\nFit on Train only → Range 0 to 1"]
     E --> F[Group-Aware Partitioning\nGroupShuffleSplit by Engine Unit]
     F --> G[Normalized Intermediate Parquet\nReady for Sliding Window Operator]
 

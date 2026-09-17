@@ -103,7 +103,7 @@ flowchart LR
     end
 
     subgraph FlinkTopology["PyFlink TaskManager Runtime"]
-        MAP["NormalizeMap\nClamp to [0.0, 1.0]"]
+        MAP["NormalizeMap\nClamp to 0.0 to 1.0"]
         KEY["keyBy(engine_id)\nThread Affinity"]
         PROC["RollingWindowProcess\n30-Cycle ListState Buffer"]
         CHECK{"Window\nSize == 30?"}

@@ -13,9 +13,9 @@ For each engine $u$, a sliding observation window of length $T = 30$ cycles adva
 ```mermaid
 flowchart LR
     subgraph Timeseries["Engine Telemetry History (N Cycles)"]
-        W1["Window 1: t ∈ [1, 30] → Label: y_30"]
-        W2["Window 2: t ∈ [2, 31] → Label: y_31"]
-        WN["Window k: t ∈ [N-29, N] → Label: y_N"]
+        W1["Window 1: t ∈ 1 to 30 → Label: y_30"]
+        W2["Window 2: t ∈ 2 to 31 → Label: y_31"]
+        WN["Window k: t ∈ N-29 to N → Label: y_N"]
         W1 --> W2 --> WN
     end
 
