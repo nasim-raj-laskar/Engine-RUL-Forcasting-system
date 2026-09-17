@@ -19,7 +19,7 @@ A production-ready Machine Learning system that predicts aircraft engine **Remai
 - ✅ **S3 Data Lake** — Medallion architecture (Bronze / Silver / Gold layers)
 - ✅ **FastAPI Inference** — REST + WebSocket + SSE API with Prometheus metrics
 - ✅ **On-Demand Retraining** — Trigger full pipeline rerun from the dashboard, stream logs live via SSE
-- ✅ **Streaming Pipeline** — Redis Streams transport (default), Solace PubSub+ optional, standalone consumer + PyFlink entry point
+- ✅ **Streaming Pipeline** — Solace PubSub+ → Kafka Connector → Kafka → PyFlink (KafkaSource, exactly-once) → Redis + S3
 - ✅ **Redis Feature Store** — Online feature tensors for sub-millisecond inference reads, TTL-based expiry
 - ✅ **Realistic Fleet Simulation** — Risk-distributed producer (70% LOW / 10% MED / 10% HIGH / 10% CRITICAL) with per-engine lifecycle offsets
 - ✅ **Drift Detection** — Evidently AI 0.7 interactive HTML reports, KS-test per sensor, viewable in-dashboard
@@ -48,11 +48,13 @@ flowchart TB
         H --> I[S3 Artifacts]
     end
 
-    subgraph Stream["Streaming"]
-        J[Telemetry Producer\nRisk-distributed\n100 engines] --> K[Redis Streams\ndefault transport]
-        K --> L[Standalone Consumer\nor PyFlink cluster]
-        L --> M[Redis Feature Store\nengine:id:features]
-        L --> N[S3 Parquet\noffline store]
+    subgraph Stream["Streaming Pipeline"]
+        J[Telemetry Producer\n100 engines · risk-distributed] -->|SMF publish| SOL[Solace PubSub+\nSMF :55555]
+        SOL --> KC[Solace Kafka Connector\nautomated bridge]
+        KC -->|produce| KF[Kafka\ntelemetry.raw · 3 partitions]
+        KF -->|KafkaSource| FL[PyFlink 2.0\nexactly-once checkpointing]
+        FL --> M[Redis Feature Store\nengine:id:features]
+        FL --> N[S3 Parquet\nHive-partitioned]
     end
 
     subgraph Infer["Inference"]
@@ -76,6 +78,8 @@ flowchart TB
     style H fill:#90EE90,stroke:#333,stroke-width:2px
     style O fill:#87CEEB,stroke:#333,stroke-width:2px
     style Q fill:#DDA0DD,stroke:#333,stroke-width:2px
+    style FL fill:#0ea5e9,stroke:#333,stroke-width:2px,color:#fff
+    style KF fill:#f59e0b,stroke:#333,stroke-width:2px,color:#000
 ```
 
 ---
@@ -226,23 +230,27 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    P["Telemetry Producer\n100 engines · risk-distributed\nper-engine lifecycle offsets\nGaussian noise drift"] --> RS["Redis Stream\ntelemetry:stream\nmaxlen 50,000"]
+    P["Telemetry Producer\n100 engines · risk-distributed\nper-engine lifecycle offsets\nGaussian noise drift"] -->|SMF publish| SOL["Solace PubSub+\naircraft/engine/+/telemetry/cycle\nSMF :55555"]
 
-    RS --> SC["Standalone Consumer\ndefault mode"]
-    RS -.->|SOLACE_HOST set| SOL["Solace PubSub+\noptional broker"]
-    SOL -.-> PF["PyFlink Pipeline\ncluster mode"]
+    SOL --> KC["Solace Kafka Connector\nautomated bridge\nno code · config-driven"]
+    KC -->|produce| KF["Kafka\ntelemetry.raw\n3 partitions · retention 24h"]
 
-    SC --> NF["NormalizationFunction\nMinMax stateless\nscaler_params.csv"]
-    PF -.-> NF
-    NF --> RW["RollingWindowFunction\n30-cycle keyed buffer\nper-engine state"]
+    KF -->|KafkaSource\nconsumer group: flink-telemetry| FL["PyFlink 2.0\nexactly-once checkpointing"]
+
+    FL --> NF["NormalizationFunction\nMinMax stateless\nscaler_params.csv"]
+    NF --> RW["RollingWindowFunction\n30-cycle keyed buffer\nper-engine ListState"]
     RW --> RD["RedisSink\nengine:id:features\nfloat32 bytes · TTL 1h"]
-    RW --> S3["S3ParquetSink\nflush every 500 vectors\nHive-partitioned"]
+    RW --> S3["S3ParquetSink\nHive-partitioned\ncheckpoint-aligned flush"]
 
     RD --> API["FastAPI\n/predict/engine/id\n/ws/predictions"]
 
     style P fill:#1e3a5f,color:#fff
+    style SOL fill:#4a1d96,color:#fff
+    style KC fill:#7c3aed,color:#fff
+    style KF fill:#f59e0b,color:#000
+    style FL fill:#0e7490,color:#fff
     style RD fill:#b91c1c,color:#fff
-    style API fill:#0e7490,color:#fff
+    style API fill:#166534,color:#fff
 ```
 
 ---
@@ -296,7 +304,7 @@ WebSocket streams: `/ws/predictions` (5s), `/ws/telemetry` (2s), `/ws/alerts` (5
 | **ML** | TensorFlow/Keras, NumPy, Pandas, Scikit-learn |
 | **MLOps** | MLflow, DagsHub, AWS S3, Boto3 |
 | **Inference** | FastAPI, Uvicorn, Redis, Pydantic, MC Dropout |
-| **Streaming** | Redis Streams, Solace PubSub+ (optional), Apache Flink (PyFlink), PyArrow |
+| **Streaming** | Solace PubSub+, Kafka (KRaft), Kafka Connect, Apache Flink 2.0 (PyFlink), Redis Streams (fallback), PyArrow |
 | **Frontend** | Vue 3, Vite, TypeScript, TailwindCSS, ECharts, Pinia, Vue Router |
 | **Monitoring** | Prometheus, Grafana, Evidently AI 0.7, Node Exporter, Redis Exporter |
 | **Infrastructure** | Docker, nginx, docker-compose |

@@ -38,6 +38,15 @@ RUN echo "redis>=7.4.0" > /tmp/beam_override.txt \
 # Install with --no-deps to skip the conflicting transitive resolver.
 RUN uv pip install "apache-flink==2.2.1" --no-deps
 
+# Step 3b: Install apache-flink's transitive deps that --no-deps skipped.
+# These are critical for the Beam Python worker (UDF runner) on TaskManager.
+# Without them the worker process crashes immediately causing endless restarts.
+RUN pip install --no-cache-dir \
+    "py4j==0.10.9.7" \
+    "avro>=1.12.0" \
+    "pemja>=0.5.7,<0.5.8" \
+    "apache-flink-libraries>=2.2.1,<2.2.2"
+
 # Step 4: Download flink-connector-kafka JAR for KafkaSource
 # This JAR must be on the Flink classpath for PyFlink's KafkaSource to work.
 RUN curl -fSL -o /opt/flink/lib/flink-connector-kafka-4.0.1-2.0.jar \

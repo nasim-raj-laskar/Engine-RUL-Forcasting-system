@@ -20,10 +20,12 @@ flowchart TB
     end
 
     subgraph Stream["Streaming Pipeline"]
-        J[Telemetry Producer\n100 engines\nrisk-distributed] --> K[Redis Streams\ndefault transport]
-        K --> L[Standalone Consumer\nor PyFlink cluster]
-        L --> M[Redis Feature Store\nengine:id:features]
-        L --> N[S3 Parquet\noffline store]
+        J[Telemetry Producer\n100 engines · risk-distributed] -->|SMF publish| SOL[Solace PubSub+\nSMF :55555]
+        SOL --> KC[Solace Kafka Connector\nautomated bridge]
+        KC -->|produce| KF[Kafka\ntelemetry.raw · 3 partitions]
+        KF -->|KafkaSource| FL[PyFlink 2.0\nexactly-once checkpointing]
+        FL --> M[Redis Feature Store\nengine:id:features]
+        FL --> N[S3 Parquet\nHive-partitioned]
     end
 
     subgraph Infer["Inference Service"]
@@ -46,6 +48,9 @@ flowchart TB
     style H fill:#90EE90,stroke:#333,stroke-width:2px
     style O fill:#87CEEB,stroke:#333,stroke-width:2px
     style Q fill:#DDA0DD,stroke:#333,stroke-width:2px
+    style FL fill:#0ea5e9,stroke:#333,stroke-width:2px,color:#fff
+    style KF fill:#f59e0b,stroke:#333,stroke-width:2px,color:#000
+    style SOL fill:#7c3aed,stroke:#333,stroke-width:2px,color:#fff
 ```
 
 ---
@@ -56,8 +61,10 @@ flowchart TB
 sequenceDiagram
     participant CSV as FD001 Dataset
     participant PROD as Telemetry Producer
-    participant RS as Redis Stream
-    participant CONS as Standalone Consumer
+    participant SOL as Solace PubSub+
+    participant KC as Kafka Connector
+    participant KF as Kafka Broker
+    participant FL as PyFlink Job
     participant R as Redis Feature Store
     participant S3 as S3 Parquet
     participant API as FastAPI
@@ -65,14 +72,16 @@ sequenceDiagram
     participant WS as WebSocket Clients
 
     CSV->>PROD: Read rows · risk-distributed lifecycle offsets
-    PROD->>RS: XADD telemetry:stream {engine_id, cycle, sensors}
-    RS->>CONS: XREAD batch 200 msgs · 1s block
+    PROD->>SOL: SMF publish aircraft/engine/ENG-042/telemetry/cycle
+    SOL->>KC: Solace Kafka Connector (automated bridge)
+    KC->>KF: Produce to telemetry.raw (3 partitions)
 
-    CONS->>CONS: NormalizationFunction (MinMax stateless)
-    CONS->>CONS: RollingWindowFunction (30-cycle keyed buffer)
-    CONS->>R: SET engine:{id}:features (float32 bytes · TTL 1h)
-    CONS->>R: HSET engine:{id}:meta {cycle, event_time}
-    CONS->>S3: Parquet flush every 500 vectors
+    KF->>FL: KafkaSource (consumer group: flink-telemetry)
+    FL->>FL: NormalizeMap (MinMax stateless)
+    FL->>FL: RollingWindowProcess (30-cycle keyed ListState)
+    FL->>R: SET engine:{id}:features (float32 bytes · TTL 1h)
+    FL->>R: HSET engine:{id}:meta {cycle, event_time}
+    FL->>S3: S3ParquetSink (checkpoint-aligned flush)
 
     Note over API: WebSocket prediction loop (every 5s)
     API->>R: KEYS engine:*:features → list active engines
@@ -96,25 +105,32 @@ flowchart LR
     subgraph Producer
         A[FD001 rows\nper-engine grouped] --> B[Risk-distributed\nlifecycle offset\n70/10/10/10]
         B --> C[Virtual monotonic\ncycle counter\nper engine]
-        C --> D{Transport}
-        D -->|default| E[Redis XADD\ntelemetry:stream]
-        D -->|SOLACE_HOST set| F[Solace PubSub+\naircraft/engine/*/telemetry/cycle]
+        C --> D[SMF publish to\nSolace PubSub+]
     end
 
-    subgraph Consumer
-        E --> G[XREAD batch]
-        F --> G
-        G --> H[NormalizationFunction\nMinMax stateless]
-        H --> I[RollingWindowFunction\n30-cycle keyed deque]
-        I --> J{Window full?}
+    subgraph Ingestion["Ingestion Layer"]
+        D --> SOL[Solace PubSub+\naircraft/engine/*/telemetry/cycle]
+        SOL --> KC[Solace Kafka Connector\nautomated bridge]
+        KC --> KF[Kafka telemetry.raw\n3 partitions · retention 24h]
+    end
+
+    subgraph Flink["PyFlink 2.0 Job"]
+        KF -->|KafkaSource| NM[NormalizeMap\nMinMax stateless]
+        NM --> KBY[keyBy engine_id\nhash partitioned]
+        KBY --> RW[RollingWindowProcess\n30-cycle ListState\nRocksDB backend]
+        RW --> J{Window full?}
         J -->|yes| K[RedisSink\nengine:id:features]
-        J -->|yes| L[S3ParquetSink\nflush every 500]
-        J -->|no| M[accumulate]
+        J -->|yes| L[S3ParquetSink\ncheckpoint-aligned]
+        J -->|no| M[accumulate in state]
     end
 
     subgraph Inference
         K --> N[FastAPI\n/predict/engine/id\n/ws/predictions]
     end
+
+    style SOL fill:#4a1d96,color:#fff
+    style KC fill:#7c3aed,color:#fff
+    style KF fill:#f59e0b,color:#000
 ```
 
 ---
@@ -196,13 +212,21 @@ flowchart TB
 ```mermaid
 graph TB
     subgraph Docker["Docker Compose — 13 services"]
-        subgraph Broker["Event Broker"]
+        subgraph Broker["Event Broker + Messaging"]
             SOL[Solace PubSub+\n:8080 :55555]
+            KF[Kafka KRaft\n:9092 :29092]
+            KC[Kafka Connect\n:8083]
         end
 
         subgraph Streaming["Stream Processing"]
-            PROD[telemetry-producer\nRisk-distributed · Redis Streams]
-            CONS[standalone-consumer\nNormalize → Window → Redis]
+            PROD[telemetry-producer\nRisk-distributed · SMF publish]
+            CONS[standalone-consumer\nRedis Streams fallback]
+        end
+
+        subgraph FlinkCluster["Apache Flink 2.0"]
+            JM[JobManager :8082\ncluster coordinator]
+            TM[TaskManager\n3 slots · Python UDF runner]
+            SUB[flink-submitter\njob deployment]
         end
 
         subgraph Store["Feature Store"]
@@ -211,7 +235,6 @@ graph TB
 
         subgraph ML["ML Services"]
             API[inference-api :8000\nFastAPI + Retraining + Drift]
-            FLINK[Flink :8082\ncluster mode optional]
         end
 
         subgraph FE["Frontend"]
@@ -226,9 +249,13 @@ graph TB
         end
     end
 
-    PROD --> RD
-    RD --> CONS
-    CONS --> RD
+    PROD --> SOL
+    SOL --> KC
+    KC --> KF
+    KF --> TM
+    SUB --> JM
+    JM --> TM
+    TM --> RD
     RD --> API
     API --> PROM
     NODE --> PROM

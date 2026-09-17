@@ -37,7 +37,7 @@ mindmap
 | 03 | [Feature Engineering](03_feature_engineering.md) | Sequence building for GRU, sliding windows, target normalization, train/val split |
 | 04 | [Model Training & Registry](04_model_training.md) | GRU architecture, training, evaluation, MLflow Model Registry, promotion, S3 upload |
 | 05 | [Inference Service](05_inference_service.md) | FastAPI REST + WebSocket API, Redis feature store, pipeline retraining endpoint, Docker |
-| 06 | [Streaming Pipeline](06_streaming_pipeline.md) | Redis Streams transport, risk-distributed producer, standalone consumer, PyFlink entry point, Solace optional |
+| 06 | [Streaming Pipeline](06_streaming_pipeline.md) | Solace PubSub+ ingestion, Kafka Connector bridge, Kafka topics, PyFlink KafkaSource, Redis + S3 sinks |
 | 07 | [Monitoring and Observability](07_monitoring.md) | Prometheus + Grafana, Evidently drift detection (Evidently 0.7 API), alerting rules |
 | 07.1 | [Dashboard UI](07.1_UI.md) | Vue 3 dashboard — 5 pages, WebSocket streams, Pinia stores, retraining UI |
 | 08 | [Project Structure and Build Order](08_project_structure.md) | Directory layout, 7-stage pipeline, Docker stack, environment setup |
