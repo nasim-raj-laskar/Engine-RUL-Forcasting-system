@@ -29,7 +29,7 @@
 <h2 align="center">🏗️ High-Level Architecture</h2>
 
 <p align="center">
-  <img src="assets/architecture.png" alt="High-Level Architecture Diagram" width="100%" />
+  <img src="assets\architecture.png" alt="High-Level Architecture Diagram" width="100%" />
 </p>
 
 ---
