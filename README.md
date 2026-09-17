@@ -30,58 +30,7 @@ A production-ready Machine Learning system that predicts aircraft engine **Remai
 ---
 
 ## 🏗️ High-Level Architecture
-
-```mermaid
-flowchart TB
-    subgraph Data["Data Layer"]
-        A[NASA C-MAPSS FD001] --> B[S3 Bronze]
-        B --> C[S3 Silver]
-        C --> D[S3 Gold]
-    end
-
-    subgraph Pipeline["ML Pipeline — 7 Stages"]
-        D --> E[GRU Training]
-        E --> F[Evaluation]
-        F --> G{Quality Gates\nRMSE < 20\nNASA < 2000}
-        G -->|Pass| H[MLflow Registry\nDagsHub]
-        G -->|Fail| E
-        H --> I[S3 Artifacts]
-    end
-
-    subgraph Stream["Streaming Pipeline"]
-        J[Telemetry Producer\n100 engines · risk-distributed] -->|SMF publish| SOL[Solace PubSub+\nSMF :55555]
-        SOL --> KC[Solace Kafka Connector\nautomated bridge]
-        KC -->|produce| KF[Kafka\ntelemetry.raw · 3 partitions]
-        KF -->|KafkaSource| FL[PyFlink 2.0\nexactly-once checkpointing]
-        FL --> M[Redis Feature Store\nengine:id:features]
-        FL --> N[S3 Parquet\nHive-partitioned]
-    end
-
-    subgraph Infer["Inference"]
-        I --> O[FastAPI :8000]
-        M --> O
-        O --> P[REST + WebSocket + SSE]
-    end
-
-    subgraph UI["Frontend"]
-        P --> Q[Vue 3 Dashboard\n5 pages]
-    end
-
-    subgraph Mon["Monitoring"]
-        P --> R[Prometheus :9090]
-        R --> S[Grafana :3000\n15+ panels]
-        T[Evidently AI 0.7\nKS-test drift] --> U[HTML Reports\n/drift/reports]
-        U --> Q
-    end
-
-    style G fill:#FFD700,stroke:#333,stroke-width:2px
-    style H fill:#90EE90,stroke:#333,stroke-width:2px
-    style O fill:#87CEEB,stroke:#333,stroke-width:2px
-    style Q fill:#DDA0DD,stroke:#333,stroke-width:2px
-    style FL fill:#0ea5e9,stroke:#333,stroke-width:2px,color:#fff
-    style KF fill:#f59e0b,stroke:#333,stroke-width:2px,color:#000
-```
-
+![](assets/architecture.png)
 ---
 
 ## 📊 Current Model Performance
