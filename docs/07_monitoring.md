@@ -1,176 +1,117 @@
-# Monitoring and Observability
+# Monitoring & Observability Specification
 
-## Overview
+## Distributed System Telemetry, Grafana Dashboards & Sensor Drift Analysis
 
-Three-layer monitoring: system health, data health, and model health.
-
-```mermaid
-mindmap
-  root((Monitoring Stack))
-    System Metrics
-      Prometheus :9090
-      Node Exporter :9100
-      Redis Exporter :9121
-    Visualization
-      Grafana :3000
-      15+ dashboard panels
-      Auto-provisioned JSON
-    ML Monitoring
-      Evidently AI 0.7
-      KS-test per sensor
-      Interactive HTML reports
-      Served via API iframe
-    Logging
-      Structured JSON inference log
-      Pipeline log SSE streaming
-    Alerting
-      5 alert rules defined
-      Prometheus alertmanager
-```
+The platform implements a multi-tier observability architecture spanning infrastructure performance, microservice health, and statistical machine learning drift.
 
 ---
 
-## Stack Components
-
-| Component | Purpose | Port |
-|-----------|---------|------|
-| Prometheus | Metrics collection and storage | 9090 |
-| Grafana | Dashboards and visualization | 3000 |
-| Node Exporter | System metrics (CPU, memory, disk) | 9100 |
-| Redis Exporter | Redis performance metrics | 9121 |
-| Evidently AI 0.7 | ML-specific drift detection + HTML reports | — |
-
----
-
-## Prometheus Scrape Targets
-
-```mermaid
-flowchart LR
-    API["FastAPI :8000\n/metrics"] --> PROM["Prometheus\n15s scrape interval"]
-    NODE["node-exporter :9100\nCPU · memory · disk"] --> PROM
-    REDIS["redis-exporter :9121\nRedis internals"] --> PROM
-    PROM --> GRAF["Grafana :3000\n15+ panels"]
-    PROM --> ALERT["alerting_rules.yml\n5 alert rules"]
-```
-
----
-
-## Prometheus Metrics
-
-All metrics defined in `src/inference/metrics.py` and exposed at `GET /metrics`. Populated by the WebSocket batch prediction loop (every 5s) — not just REST endpoint calls.
-
-| Metric | Type | Labels | Description |
-|--------|------|--------|-------------|
-| `active_engines_total` | Gauge | — | Current engines with feature tensors in Redis |
-| `prediction_requests_total` | Counter | `engine_id`, `risk_level` | Total predictions made |
-| `prediction_latency_seconds` | Histogram | — | Batch forward pass duration |
-| `predicted_rul_cycles` | Histogram | — | Distribution of predicted RUL values |
-| `failure_risk_score` | Histogram | — | Distribution of risk scores |
-| `prediction_confidence` | Histogram | — | Distribution of confidence scores |
-| `critical_engines_total` | **Gauge** | — | Current CRITICAL engine count (set each WS cycle) |
-| `prediction_errors_total` | Counter | `error_type` | Inference errors by type |
-| `model_load_time_seconds` | Gauge | — | Startup model load time |
-
-> `critical_engines_total` is a **Gauge** — it reflects the current snapshot of CRITICAL engines, not a running total. This keeps the Grafana panel showing a believable number (e.g. 12) rather than an ever-growing counter.
-
----
-
-## Grafana Dashboard
-
-Auto-provisioned from `monitoring/grafana/dashboards/aircraft_engine_monitoring.json` on startup. 15+ panels across 4 rows:
-
-| Row | Panels |
-|-----|--------|
-| Row 1 — Stats | Active Engines · Prediction Throughput · Critical Engines · Model Load Time · Error Rate · Avg Confidence |
-| Row 2 — Time Series | Prediction Latency p50/p95/p99 · Requests by Risk Level |
-| Row 3 — Distributions | RUL Distribution · Risk Score Distribution |
-| Row 4 — System | CPU Usage % · Memory Usage % |
-| Row 5 — Redis | Connected Clients · Memory % · Commands/s |
-| Row 6 — Errors | Prediction Errors by Type · Inference API Up |
-
-![Grafana Dashboard](../assets/grafana.png)
-
-Key panel queries:
-
-| Panel | Query |
-|-------|-------|
-| Active Engines | `active_engines_total` |
-| Prediction Throughput | `sum(rate(prediction_requests_total[1m]))` |
-| Critical Engines | `critical_engines_total` |
-| Error Rate | `sum(rate(prediction_errors_total[5m])) or vector(0)` |
-| Avg Confidence | `histogram_quantile(0.50, sum(rate(prediction_confidence_bucket[5m])) by (le))` |
-| Latency p50/p95/p99 | `histogram_quantile(0.X, sum(rate(prediction_latency_seconds_bucket[5m])) by (le))` |
-| Redis Memory % | `redis_memory_used_bytes / (redis_memory_max_bytes > 0 or redis_memory_used_bytes) * 100` |
-
----
-
-## Alerting Rules
-
-Defined in `monitoring/prometheus/alerting_rules.yml`:
-
-| Alert | Condition | Severity |
-|-------|-----------|----------|
-| `CriticalEngineDetected` | `rate(critical_engines_total[5m]) > 0` for 1m | critical |
-| `HighPredictionLatency` | p95 latency > 0.1s for 5m | warning |
-| `HighErrorRate` | error rate > 0.01/s for 5m | warning |
-| `RedisMemoryHigh` | Redis memory > 80% for 5m | warning |
-| `InferenceAPIDown` | `up{job="inference-api"} == 0` for 1m | critical |
-
-> Alert notifications (email/Slack) are not yet wired to an Alertmanager receiver. Rules fire in Prometheus but routing is not configured.
-
----
-
-## Evidently AI 0.7 Drift Detection
+## 🔭 Multi-Tier Observability Architecture
 
 ```mermaid
 flowchart TD
-    REF["Reference Data\ntraining sensor distributions"] --> DET["DriftDetector\nsrc/monitoring/drift_detector.py"]
-    CUR["Current Data\nrecent predictions / features"] --> DET
-    DET --> KS["KS-test per sensor\ncheck_drift() → drift_share\ndrifted_features · p_values"]
-    DET --> REP["Evidently Report\nDataDriftPreset\nsnapshot.save_html()"]
-    REP --> HTML["reports/drift/\ndrift_report_timestamp.html"]
-    HTML --> API["GET /drift/reports\nGET /drift/reports/filename"]
-    API --> UI["MLOps page\nfull-screen iframe modal"]
+    subgraph Instrumentation["Telemetry Sources"]
+        API["FastAPI :8000\n9 Custom Prometheus Gauges & Counters"]
+        NODE["Node Exporter :9100\nCPU · Memory · Disk IO"]
+        REDIS["Redis Exporter :9121\nKey Cardinality · Evictions · Memory"]
+    end
+
+    subgraph MetricsCollector["Time Series Storage"]
+        PROM["Prometheus Engine :9090\n15-Second Automated Scrape Loop"]
+    end
+
+    subgraph VisualObservability["Visualization"]
+        GRAF["Grafana Enterprise :3000\n15+ Pre-Provisioned Production Panels"]
+    end
+
+    subgraph MLDrift["ML Observability"]
+        EVID["Evidently AI 0.7 Engine\nKolmogorov-Smirnov (KS) Two-Sample Drift Test"]
+        REPORTS["HTML Visual Reports\nMounted into Container at /drift/reports/"]
+        MODAL["Operations UI\nIn-Dashboard Fullscreen Modal"]
+    end
+
+    API & NODE & REDIS --> PROM
+    PROM --> GRAF
+    EVID --> REPORTS --> MODAL
+
+    style PROM fill:#c2410c,color:#fff
+    style GRAF fill:#ea580c,color:#fff
+    style EVID fill:#4f46e5,color:#fff
 ```
 
-**Evidently 0.7 API note:** `report.run()` returns a `Snapshot` object. Call `snapshot.save_html()` on the snapshot — not on the report. This changed from earlier Evidently versions.
-
-Run drift detection manually:
-
-```bash
-python src/monitoring/drift_monitor.py
-# Reports saved to reports/drift/drift_report_<timestamp>.html
-```
-
-> Scheduled drift monitoring (hourly cron) is not yet configured. Run manually as needed.
+![Grafana Dashboard Overview](../assets/grafana.png)
 
 ---
 
-## Structured Logging
+## 1. Prometheus Telemetry Matrix
 
-Inference API uses JSON-formatted structured logging (`src/inference/structured_logger.py`).
+Custom metrics instrumented within `src/inference/metrics.py` and exposed at `GET /metrics`:
 
-Log fields per prediction: `timestamp`, `level`, `message`, `engine_id`, `rul`, `risk`, `risk_level`, `confidence`, `latency_ms`.
-
-Log files:
-- `logs/inference.log` — inference API predictions
-- `logs/pipeline_<timestamp>.log` — retraining pipeline runs (streamed live via SSE)
+| Metric Identifier | Class | Labels | Operational Semantics |
+| :--- | :--- | :--- | :--- |
+| `active_engines_total` | **Gauge** | None | Real-time count of engines maintaining active feature vectors in Redis |
+| `critical_engines_total` | **Gauge** | None | Instantaneous count of engines operating within the critical failure envelope |
+| `prediction_requests_total` | **Counter** | `engine_id`, `risk_level` | Monotonic count of total inferences scored across all pathways |
+| `prediction_latency_seconds` | **Histogram** | None | Execution duration of the batched GRU model inference pass |
+| `predicted_rul_cycles` | **Histogram** | None | Empirical distribution of denormalized RUL predictions across the fleet |
+| `failure_risk_score` | **Histogram** | None | Distribution of fleet failure risk scores $[0.0, 1.0]$ |
+| `prediction_confidence` | **Histogram** | None | Epistemic confidence scores derived from Monte Carlo Dropout variance |
+| `prediction_errors_total` | **Counter** | `error_type` | Diagnostic counter capturing tensor shape mismatches or Redis timeouts |
+| `model_load_time_seconds` | **Gauge** | None | Cold-start model deserialization and warm-up latency |
 
 ---
 
-## Running the Stack
+## 2. Automated Alerting Matrix
 
-```bash
-# Start everything
-docker compose up -d
+Rules defined within `monitoring/prometheus/alerting_rules.yml`:
 
-# Access
-# Grafana:    http://localhost:3000  (admin/admin)
-# Prometheus: http://localhost:9090
+| Alert Identifier | Threshold Condition | Evaluation Duration | Severity Level |
+| :--- | :--- | :--- | :--- |
+| `CriticalEngineDetected` | `rate(critical_engines_total[5m]) > 0` | 1 minute | **CRITICAL** |
+| `HighPredictionLatency` | $p_{95}(\text{prediction\_latency}) > 100\text{ms}$ | 5 minutes | **WARNING** |
+| `HighInferenceErrorRate` | $\text{rate}(\text{prediction\_errors}) > 0.01 / \text{sec}$ | 5 minutes | **WARNING** |
+| `RedisMemoryExhaustion` | $\text{Redis Memory Usage} > 80\%$ | 5 minutes | **WARNING** |
+| `InferenceEngineDown` | `up{job="inference-api"} == 0` | 1 minute | **CRITICAL** |
 
-# Reload Grafana dashboard after JSON changes
-docker compose restart grafana
+---
 
-# Run drift check manually
-python src/monitoring/drift_monitor.py
+## 3. Evidently AI 0.7 Sensor Drift Engine
+
+Sensor drift indicates physical turbofan wear, calibration degradation, or operating condition shifts:
+
+```mermaid
+flowchart LR
+    REF["Baseline Gold Distribution\nTraining Sensor Feature Matrices"] --> DRIFT["Evidently 0.7 Engine\nsrc/monitoring/drift_detector.py"]
+    CUR["Live Streaming Telemetry\nRecent Windowed Engine Records"] --> DRIFT
+
+    DRIFT --> KS["Kolmogorov-Smirnov Test\np-value < 0.05 Threshold per Sensor"]
+    DRIFT --> PRESET["DataDriftPreset Snapshot\nsnapshot.save_html()"]
+    PRESET --> HTML["Interactive HTML Report\nServed at GET /drift/reports"]
+    HTML --> UI["Operations UI\nMLOps Drift Inspection Tab"]
+
+    style DRIFT fill:#4338ca,color:#fff
+    style UI fill:#15803d,color:#fff
 ```
+
+### Statistical Verification
+* **Algorithm**: Non-parametric two-sample Kolmogorov-Smirnov (KS) test per sensor channel.
+* **Null Hypothesis ($H_0$)**: Incoming telemetry samples originate from the baseline training distribution.
+* **Drift Threshold**: Feature flagged as drifted if KS test $p$-value $< 0.05$.
+* **Evidently 0.7 API Contract**: `report.run()` returns a `Snapshot` object, calling `snapshot.save_html()` on the snapshot directly.
+
+---
+
+## 4. Structured Operational Logging
+
+The inference engine emits JSON structured log events with consistent audit fields:
+
+| Field | Type | Description |
+| :--- | :--- | :--- |
+| `timestamp` | ISO-8601 | UTC microsecond timestamp |
+| `level` | String | Log severity (`INFO`, `WARNING`, `ERROR`) |
+| `engine_id` | String | Unique aircraft engine identifier |
+| `rul` | Float | Predicted remaining flight cycles |
+| `failure_risk` | Float | Normalized risk score $[0.0, 1.0]$ |
+| `risk_level` | String | Categorical status (`LOW`, `MED`, `HIGH`, `CRITICAL`) |
+| `confidence` | Float | Bayesian confidence index $[0.0, 1.0]$ |
+| `latency_ms` | Float | End-to-end forward pass execution time |

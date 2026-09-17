@@ -1,134 +1,85 @@
-# Feature Engineering
+# Feature Engineering Specification
 
-## Overview
+## Temporal Sequence Windowing & Gated Tensor Formatting
 
-The feature engineering stage transforms preprocessed sensor data into sliding window sequences ready for GRU input.
-
-```mermaid
-mindmap
-  root((Feature Engineering))
-    Input
-      11 useful sensors
-      Normalized to 0-1
-      Grouped by engine
-    Sequence Building
-      Sliding window size 30
-      Step size 1 cycle
-      Padding for short engines
-    Target
-      RUL normalized by 125
-      Sigmoid output range 0-1
-    Output
-      X shape n × 30 × 11
-      y shape n
-```
+The feature engineering stage maps normalized multivariate time-series records into 3D sliding sequence tensors required by Recurrent Neural Networks (GRU), enforcing temporal causality and target normalization.
 
 ---
 
-## Sliding Window Sequences
+## 🪟 Sliding Temporal Windowing
 
-The core step: for each engine, slide a window of 30 cycles across its history. Each window becomes one training sample.
+For each engine $u$, a sliding observation window of length $T = 30$ cycles advances by step size $\Delta t = 1$:
 
 ```mermaid
 flowchart LR
-    subgraph Engine["Engine ENG-042 (206 cycles)"]
-        direction LR
-        W1["Window 1\ncycles 1–30\n→ label: RUL@30"] --> W2["Window 2\ncycles 2–31\n→ label: RUL@31"]
-        W2 --> W3["..."]
-        W3 --> WN["Window 177\ncycles 177–206\n→ label: RUL@206 = 0"]
+    subgraph Timeseries["Engine Telemetry History (N Cycles)"]
+        W1["Window 1: t ∈ [1, 30] → Label: y_30"]
+        W2["Window 2: t ∈ [2, 31] → Label: y_31"]
+        WN["Window k: t ∈ [N-29, N] → Label: y_N"]
+        W1 --> W2 --> WN
     end
 
-    WN --> OUT["X: (177, 30, 11)\ny: (177,)"]
-
-    style OUT fill:#90EE90,stroke:#333,color:#000
+    WN --> TENSOR["Feature Tensor X: (K, 30, 11)\nTarget Vector y: (K,)"]
+    style TENSOR fill:#1e293b,stroke:#22c55e,color:#fff
 ```
 
-**Output shape per engine:** `(n_cycles - window_size + 1, 30, 11)`
+### Tensor Dimensions
+
+* **Sample Matrix $X$**: Shape $\left(K, 30, 11\right)$ where $K = N_u - T + 1$.
+* **Target Array $y$**: Shape $\left(K,\right)$ representing normalized RUL at cycle $t + T - 1$.
+* **Test Sequence Formulation**: Only the terminal 30-cycle observation window $\left[N_{\text{last}}-29, N_{\text{last}}\right]$ is extracted for each test engine. Engines with history $< 30$ cycles are zero-padded along the front temporal dimension: $\text{pad}(X, (30 - L, 11))$.
 
 ---
 
-## Test Set — Last Window Only
+## 🎯 Target Range Normalization
 
-For test data, only the **last 30 cycles** per engine are used (the model predicts RUL at the most recent observation).
+To ensure gradient stability with Sigmoid output units, RUL labels are normalized into the continuous unit interval $[0.0, 1.0]$:
 
-Engines with fewer than 30 cycles are zero-padded at the front.
+$$y_{\text{train}} = \frac{RUL_{\text{clipped}}}{125.0}, \quad y_{\text{train}} \in [0.0, 1.0]$$
 
----
+At inference runtime, the prediction scalar is denormalized:
 
-## Target Normalization
-
-RUL values are normalized to `[0, 1]` to match the Sigmoid output:
-
-```
-y_normalized = RUL / 125
-```
-
-At inference, denormalize: `RUL_cycles = model_output × 125`
+$$\widehat{RUL}_{\text{cycles}} = \hat{y} \times 125.0$$
 
 ---
 
-## Data Split Strategy
+## ⚡ Real-Time Streaming Feature Assembly
 
-```mermaid
-flowchart TD
-    ALL[All 100 engines] --> GSS[GroupShuffleSplit\nby engine unit\ntest_size=0.2]
-    GSS --> TR[80 engines → Training sequences]
-    GSS --> VA[20 engines → Validation sequences]
-
-    TR --> XTR["X_train: (~16k, 30, 11)\ny_train: (~16k,)"]
-    VA --> XVA["X_val: (~4k, 30, 11)\ny_val: (~4k,)"]
-
-    style XTR fill:#90EE90,stroke:#333,color:#000
-    style XVA fill:#87CEEB,stroke:#333,color:#000
-```
-
-Engines stay intact — all cycles from one engine go to either train or val, never split across both.
-
----
-
-## Configuration
-
-| Parameter | Value | Location |
-|-----------|-------|----------|
-| window_size | 30 | `config/features.yaml` |
-| test_size | 0.2 | `config/features.yaml` |
-| rul_clip | 125 | `config/transform.yaml` |
-
----
-
-## Output Artifacts
-
-```
-artifacts/data_feature_engineering/
-├── X_train.npy          (n_train, 30, 11)
-├── y_train.npy          (n_train,)
-├── X_val.npy            (n_val, 30, 11)
-├── y_val.npy            (n_val,)
-├── X_test.npy           (n_test, 30, 11)
-├── y_test.npy           (n_test,)
-└── feature_config.json  window_size, features list, rul_clip, scaler_path
-```
-
----
-
-## Streaming Feature Engineering
-
-In the real-time pipeline, features are built incrementally per engine:
+In the production streaming pipeline, sequence tensors are constructed continuously per engine without centralized database scans:
 
 ```mermaid
 sequenceDiagram
-    participant P as Producer
-    participant RS as Redis Stream
-    participant C as Consumer
-    participant R as Redis Feature Store
-    participant API as FastAPI
+    autonumber
+    participant Broker as Kafka (telemetry.raw)
+    participant Flink as PyFlink 2.0 (TaskManager)
+    participant State as RocksDB Keyed State (ListState)
+    participant Redis as Redis Feature Store (:6379)
+    participant API as FastAPI Inference Worker
 
-    P->>RS: XADD engine_id · cycle · sensors
-    RS->>C: XREAD batch
-    C->>C: NormalizationFunction (MinMax stateless)
-    C->>C: RollingWindowFunction (30-cycle keyed buffer)
-    C->>R: SET engine:id:features (float32 bytes)
-    R->>API: GET at inference time
+    Broker->>Flink: Ingest single engine record (11 sensor floats)
+    Flink->>Flink: Stateless MinMax Normalization
+    Flink->>State: Append normalized row to engine's ListState
+    Note over State: Buffer length checked
+    alt Buffer Length == 30
+        State-->>Flink: Emit full (30, 11) FeatureVector
+        Flink->>Redis: Atomic pipeline MSET engine:{id}:features (330 float32)
+        State->>State: Evict oldest cycle (sliding advance)
+    else Buffer Length < 30
+        State->>State: Retain in RocksDB state (awaiting cycles)
+    end
+    API->>Redis: GET engine:{id}:features at inference time
 ```
 
-The `RollingWindowFunction` maintains a per-engine deque of the last 30 normalized sensor rows. When the buffer reaches 30 entries it emits a `FeatureVector` identical in shape to `X_test` — the same model reads both.
+---
+
+## 📦 Artifact Catalog
+
+| Artifact Path | Dimensionality | Description |
+| :--- | :--- | :--- |
+| `artifacts/data_feature_engineering/X_train.npy` | `(~16000, 30, 11)` | Training sequence tensor (float32) |
+| `artifacts/data_feature_engineering/y_train.npy` | `(~16000,)` | Continuous normalized target array |
+| `artifacts/data_feature_engineering/X_val.npy` | `(~4000, 30, 11)` | Validation sequence tensor |
+| `artifacts/data_feature_engineering/y_val.npy` | `(~4000,)` | Validation target array |
+| `artifacts/data_feature_engineering/X_test.npy` | `(100, 30, 11)` | Terminal evaluation sequence per test unit |
+| `artifacts/data_feature_engineering/y_test.npy` | `(100,)` | Ground truth RUL values from `RUL_FD001.txt` |
+| `artifacts/data_feature_engineering/feature_config.json` | JSON Object | Window dimension ($30$), feature indices, clip value ($125$) |

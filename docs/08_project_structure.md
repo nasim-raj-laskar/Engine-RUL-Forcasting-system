@@ -1,295 +1,136 @@
-# Project Structure
+# Project Structure & Microservice Topology
 
-## Directory Layout
+## Codebase Organization, MLOps Stages & Container Orchestration
+
+A modular monorepo cleanly separating ML lifecycle pipelines, streaming workers, asynchronous inference runtimes, and frontend presentation layers.
+
+---
+
+## 🗂️ Monorepo Architecture
 
 ```
 Real-Time-Aircraft-Engine-Predictive-Maintenance-System/
-│
-├── Dataset/                        # Raw C-MAPSS files (read-only reference)
-│   ├── train_FD001.txt
-│   ├── test_FD001.txt
-│   ├── RUL_FD001.txt
-│   └── Damage Propagation Modeling.pdf
-│
-├── docs/                           # This documentation (11 files)
-│
-├── config/                         # YAML pipeline configs
-│   ├── config.yaml                 # Paths and artifact locations
-│   ├── features.yaml               # Sensor columns, window size
-│   ├── model.yaml                  # GRU hyperparameters (3-layer: 128→64→32)
-│   ├── params.yaml                 # Training parameters (epochs, batch size, LR)
-│   ├── redis.yaml                  # Redis connection + TTL
-│   ├── registor.yaml               # MLflow registry + promotion thresholds
-│   ├── schema.yaml                 # Data schema validation
-│   └── transform.yaml              # Scaler and transformation config
-│
-├── src/
-│   ├── components/                 # 7-stage ML pipeline components
-│   │   ├── data_ingestion.py
-│   │   ├── data_validation.py
-│   │   ├── data_transformation.py
-│   │   ├── feature_engineering.py
-│   │   ├── model_training.py
-│   │   ├── model_evaluation.py
-│   │   └── model_registry.py
-│   │
-│   ├── pipeline/                   # Pipeline stage orchestrators
-│   │   ├── data_ingestion_pipeline.py
-│   │   ├── data_validation_pipeline.py
-│   │   ├── data_transformation_pipeline.py
-│   │   ├── feature_engineering_pipeline.py
-│   │   ├── model_trainer_pipeline.py
-│   │   ├── model_evaluation_pipeline.py
-│   │   └── model_registry_pipeline.py
-│   │
-│   ├── inference/                  # FastAPI inference service
-│   │   ├── app.py                  # FastAPI entry point + middleware
-│   │   ├── routes.py               # All REST endpoints incl. pipeline + drift
-│   │   ├── ws.py                   # WebSocket endpoints + batch prediction loop
-│   │   ├── predictor.py            # MC Dropout inference logic
-│   │   ├── preprocessor.py         # Raw sensor → normalized window
-│   │   ├── loader.py               # Artifact loading at startup
-│   │   ├── buffer.py               # Redis-backed + in-memory push buffer
-│   │   ├── feature_store.py        # Redis feature store client
-│   │   ├── metrics.py              # Prometheus metric definitions
-│   │   └── structured_logger.py    # JSON structured logger
-│   │
-│   ├── monitoring/
-│   │   ├── drift_detector.py       # KS-test drift + Evidently 0.7 HTML reports
-│   │   └── drift_monitor.py        # Manual drift monitoring runner
-│   │
-│   ├── cloud/
-│   │   └── s3.py                   # S3 client wrapper
-│   │
-│   ├── metrics/
-│   │   ├── scores.py               # RMSE, NASA score
-│   │   └── plot.py                 # Evaluation plots
-│   │
-│   ├── config/
-│   │   └── configuration.py        # Config loader (reads YAML files)
-│   │
-│   ├── entity/
-│   │   └── config_entity.py        # Config + request/response dataclasses
-│   │
-│   ├── utils/
-│   │   ├── common.py               # Helper functions
-│   │   ├── mlflow_setup.py         # DagsHub + MLflow initialization
-│   │   └── suppress_warnings.py
-│   │
-│   ├── logging/
-│   │   └── logger.py               # Pipeline logger
-│   │
-│   └── exception/
-│       └── exception.py            # CustomException with file + line info
-│
-├── streaming/
-│   ├── producer/
-│   │   └── telemetry_producer.py   # Risk-distributed producer · Redis Streams + Solace
-│   │
-│   ├── pipeline/
-│   │   ├── standalone_consumer.py  # Pure Python consumer (default · no Flink needed)
-│   │   ├── telemetry_pipeline.py   # PyFlink entry point (cluster mode)
-│   │   ├── functions/
-│   │   │   ├── normalization.py    # Stateless MinMax per event
-│   │   │   └── rolling_window.py   # Per-engine 30-cycle keyed buffer
-│   │   └── sinks/
-│   │       ├── redis_sink.py       # Writes engine:{id}:features + meta
-│   │       └── s3_parquet_sink.py  # Hive-partitioned Parquet flush
-│   │
-│   ├── model/
-│   │   ├── engine_event.py         # EngineEvent dataclass
-│   │   └── feature_vector.py       # FeatureVector dataclass + serialization
-│   │
-│   └── config/
-│       └── solace.env              # Solace broker connection config
-│
-├── frontend/                       # Vue 3 + Vite + TypeScript dashboard
+├── Dataset/                 # C-MAPSS FD001 raw reference telemetry
+├── config/                  # Pipeline, model, and infrastructure YAML definitions
+│   ├── config.yaml          # S3 paths, artifact storage schemas
+│   ├── features.yaml        # Sensor selection, window geometry (30x11)
+│   ├── model.yaml           # 3-layer GRU hyperparameters & regularization
+│   ├── params.yaml          # Adam optimizer learning rate, batch size, epochs
+│   ├── redis.yaml           # Feature store host, connection pool, TTL
+│   ├── registor.yaml        # MLflow quality gate thresholds
+│   └── schema.yaml          # Telemetry column validation constraints
+├── src/                     # Core Python ML and backend microservices
+│   ├── components/          # 7 pipeline stage implementations
+│   ├── pipeline/            # Orchestrators executing each stage
+│   ├── inference/           # FastAPI application, WebSockets, feature store client
+│   ├── monitoring/          # Evidently AI 0.7 KS-drift detector
+│   ├── cloud/               # AWS S3 client wrapper
+│   └── metrics/             # Custom RMSE and NASA asymmetric scoring logic
+├── streaming/               # Real-time distributed stream processing
+│   ├── producer/            # Risk-distributed 100-engine fleet simulator
+│   ├── pipeline/            # PyFlink 2.0 streaming pipeline & operators
+│   │   ├── functions/       # Stateless normalization & RocksDB windowing
+│   │   └── sinks/           # Redis feature store & S3 Parquet sinks
+│   └── model/               # Event & FeatureVector data serialization
+├── frontend/                # Vue 3 + Vite + TypeScript operations dashboard
 │   └── src/
-│       ├── pages/
-│       │   ├── FleetPage.vue       # / — Fleet Command Center
-│       │   ├── EnginePage.vue      # /engine/:id — Engine Detail
-│       │   ├── PipelinePage.vue    # /pipeline — Pipeline Monitor
-│       │   ├── MLOpsPage.vue       # /mlops — ML Observability + Retraining
-│       │   └── ReplayPage.vue      # /replay — Simulation Lab
-│       ├── components/
-│       │   ├── ModelArchDiagram.vue  # SVG GRU architecture diagram
-│       │   ├── cards/              # StatCard, EngineTable, AlertsPanel
-│       │   └── charts/             # RiskDistributionChart, RulBarChart
-│       ├── stores/
-│       │   ├── engineStore.ts      # Predictions, telemetry, model info
-│       │   └── alertStore.ts       # Alert list + acknowledgement
-│       ├── composables/
-│       │   └── useWebSockets.ts    # Connects all 3 WS streams
-│       ├── services/
-│       │   ├── api.ts              # Axios REST + pipeline/drift API calls
-│       │   └── websocket.ts        # WS factory
-│       └── types/
-│           └── index.ts            # TypeScript interfaces
-│
-├── monitoring/
-│   ├── prometheus/
-│   │   ├── prometheus.yml          # Scrape config (inference-api, node, redis)
-│   │   └── alerting_rules.yml      # 5 alert rules
-│   └── grafana/
-│       ├── dashboards/
-│       │   └── aircraft_engine_monitoring.json   # 15+ panel dashboard
-│       └── provisioning/           # Auto-provisioning config
-│
-├── scripts/
-│   ├── export_scaler_params.py     # Exports scaler min/max to CSV for streaming consumer
-│   ├── install_flink.sh            # PyFlink installation helper
-│   └── provision_solace_queues.sh  # Creates Solace queues via SEMP API
-│
-├── reports/
-│   └── drift/                      # Evidently HTML drift reports (mounted into container)
-│
-├── artifacts/                      # Generated by pipeline (mounted read-write)
-│   ├── data_ingestion/data/
-│   ├── data_validation/status.json
-│   ├── data_transformation/
-│   │   ├── processed/
-│   │   └── scaler.pkl
-│   ├── data_feature_engineering/
-│   │   ├── X_train.npy · y_train.npy · X_val.npy · y_val.npy · X_test.npy · y_test.npy
-│   │   └── feature_config.json
-│   ├── model_trainer/
-│   │   ├── model.keras
-│   │   └── history.json
-│   └── model_evaluation/
-│       ├── metrics.json
-│       ├── confusion_matrix.png
-│       ├── pred_vs_true.png
-│       └── error_distribution.png
-│
-├── logs/                           # Pipeline + inference logs (mounted into container)
-├── main.py                         # 7-stage ML pipeline runner
-├── app.py                          # Uvicorn entry point
-├── Dockerfile                      # Inference API image (Python 3.12-slim)
-├── Dockerfile.streaming            # Producer + consumer image
-├── Dockerfile.frontend             # Vue build + nginx image
-├── nginx.conf                      # Reverse proxy (API + WS + drift + pipeline routes)
-├── docker-compose.yml              # Full 13-service stack
-├── pyproject.toml                  # uv dependency management
-└── .env                            # AWS, DagsHub, MLflow credentials
+│       ├── pages/           # 5 operational SPA views
+│       ├── components/      # ECharts widgets, SVG network diagrams
+│       ├── stores/          # Pinia reactive state stores
+│       └── composables/     # Multi-channel WebSocket management
+├── monitoring/              # Infrastructure observability definitions
+│   ├── prometheus/          # Scrape targets & alerting rule YAMLs
+│   └── grafana/             # Auto-provisioned 15-panel JSON dashboards
+├── reports/drift/           # Persisted Evidently AI 0.7 HTML drift reports
+├── artifacts/               # Generated pipeline binaries, scalers, and metrics
+└── docker-compose.yml       # 13-service microservice orchestration
 ```
 
 ---
 
-## 7-Stage ML Pipeline
+## 🔄 7-Stage Pipeline Lifecycle
 
 ```mermaid
 flowchart LR
-    S1["1\nData Ingestion\nS3 Bronze → local"] -->
-    S2["2\nData Validation\nSchema checks"] -->
-    S3["3\nData Transformation\nParquet + scaler.pkl"] -->
-    S4["4\nFeature Engineering\n30×11 NumPy sequences"] -->
-    S5["5\nModel Training\n3-layer GRU + MLflow"] -->
-    S6["6\nModel Evaluation\nRMSE · NASA · F1"] -->
-    S7["7\nModel Registry\nMLflow + S3 upload"]
+    S1["1. Ingestion\nS3 Bronze → Local"] --> S2["2. Validation\nSchema & Null Check"]
+    S2 --> S3["3. Transformation\nParquet + Scaler"]
+    S3 --> S4["4. Features\n30×11 Sequences"]
+    S4 --> S5["5. Training\n3-Layer GRU"]
+    S5 --> S6["6. Evaluation\nRMSE · NASA · F1"]
+    S6 --> S7["7. Registry\nQuality Gate & S3"]
 
-    style S1 fill:#1e3a5f,color:#fff,stroke:#00d9ff
-    style S2 fill:#1e3a5f,color:#fff,stroke:#00d9ff
-    style S3 fill:#1e3a5f,color:#fff,stroke:#00d9ff
-    style S4 fill:#1e3a5f,color:#fff,stroke:#00d9ff
-    style S5 fill:#1e3a5f,color:#fff,stroke:#00d9ff
-    style S6 fill:#1e3a5f,color:#fff,stroke:#00d9ff
-    style S7 fill:#1e3a5f,color:#fff,stroke:#00d9ff
+    style S1 fill:#1e293b,stroke:#0ea5e9,color:#fff
+    style S2 fill:#1e293b,stroke:#0ea5e9,color:#fff
+    style S3 fill:#1e293b,stroke:#0ea5e9,color:#fff
+    style S4 fill:#1e293b,stroke:#0ea5e9,color:#fff
+    style S5 fill:#1e293b,stroke:#0ea5e9,color:#fff
+    style S6 fill:#1e293b,stroke:#0ea5e9,color:#fff
+    style S7 fill:#1e293b,stroke:#22c55e,color:#fff
 ```
 
 ---
 
-## Docker Stack
+## 🐳 Containerized Service Topology
 
 ```mermaid
 graph TB
-    subgraph Streaming
-        PROD[telemetry-producer]
-        CONS[standalone-consumer]
-        SOL[solace :8080 :55555]
-        FLINK[flink-jobmanager :8082]
-        FLINKTM[flink-taskmanager]
+    subgraph Messaging["Event Fabric"]
+        SOL["aircraft-solace\nSMF :55555 :8080"]
+        KC["aircraft-kafka-connect\nConnector :8083"]
+        KF["aircraft-kafka\nKRaft :9092 :29092"]
     end
 
-    subgraph Core
-        API[inference-api :8000]
-        RD[redis :6379]
+    subgraph Streaming["Stream Processing"]
+        PROD["aircraft-producer\n100-Engine Fleet"]
+        JM["aircraft-flink-jobmanager\nWeb UI :8082"]
+        TM["aircraft-flink-taskmanager\n3 Task Slots"]
     end
 
-    subgraph Frontend
-        FE[frontend :5173\nVue 3 + nginx]
+    subgraph Storage["Online & Offline State"]
+        RD["aircraft-redis\nFeature Store :6379"]
     end
 
-    subgraph Monitoring
-        PROM[prometheus :9090]
-        GRAF[grafana :3000]
-        NODE[node-exporter :9100]
-        REDEX[redis-exporter :9121]
+    subgraph Application["Inference & UI"]
+        API["aircraft-engine-api\nFastAPI :8000"]
+        FE["aircraft-frontend\nVue 3 + Nginx :5173"]
     end
 
-    PROD --> RD
-    RD --> CONS
-    CONS --> RD
+    subgraph Observability["Monitoring"]
+        PROM["aircraft-prometheus\n:9090"]
+        GRAF["aircraft-grafana\n:3000"]
+    end
+
+    PROD --> SOL --> KC --> KF --> TM
+    JM --- TM
+    TM --> RD
     RD --> API
-    API --> PROM
-    NODE --> PROM
-    REDEX --> PROM
-    PROM --> GRAF
-    FE --> API
-```
+    API --> FE
+    API & RD --> PROM --> GRAF
 
-| Service | Image | Port |
-|---------|-------|------|
-| `inference-api` | Custom (Dockerfile) | 8000 |
-| `redis` | redis:7-alpine | 6379 |
-| `solace` | solace/solace-pubsub-standard | 8080, 55555 |
-| `flink-jobmanager` | flink:2.0 | 8082 |
-| `flink-taskmanager` | flink:2.0 | — |
-| `telemetry-producer` | Custom (Dockerfile.streaming) | — |
-| `standalone-consumer` | Custom (Dockerfile.streaming) | — |
-| `node-exporter` | prom/node-exporter | 9100 |
-| `redis-exporter` | oliver006/redis_exporter | 9121 |
-| `prometheus` | prom/prometheus | 9090 |
-| `grafana` | grafana/grafana | 3000 |
-| `frontend` | Custom (Dockerfile.frontend) | 5173 |
+    style SOL fill:#4a1d96,color:#fff
+    style KF fill:#f59e0b,color:#000
+    style TM fill:#0369a1,color:#fff
+    style RD fill:#991b1b,color:#fff
+    style API fill:#15803d,color:#fff
+    style GRAF fill:#ea580c,color:#fff
+```
 
 ---
 
-## Key Design Decisions
+## ⚙️ Microservice Resource Allocation
 
-| Decision | Choice | Reason |
-|----------|--------|--------|
-| Model architecture | 3-layer GRU (128→64→32) | Third layer adds compression before dense head |
-| Confidence estimation | MC Dropout (30 passes) | Uncertainty without separate ensemble |
-| RUL clip | 125 cycles | Standard in literature, focuses on degradation window |
-| Window size | 30 cycles | Balances temporal context vs. noise |
-| Stream transport | Redis Streams (default) | No external broker needed in Docker stack |
-| Event broker | Solace PubSub+ (optional) | Multi-protocol, no ZooKeeper, hardware routing |
-| Online feature store | Redis | Sub-millisecond reads, TTL-based expiry |
-| Offline store | S3 Parquet (Hive-partitioned) | Columnar, efficient for batch retraining reads |
-| Model registry | MLflow + DagsHub | Open source, remote tracking, versioning |
-| `critical_engines_total` | Gauge (not Counter) | Reflects current snapshot, not running total |
-| Producer throttle | Once per round (not per engine) | All 100 engines fill windows quickly on startup |
-| Dependency management | uv | Fast, modern Python package manager |
-
----
-
-## Environment Setup
-
-```bash
-# Install dependencies
-uv sync
-
-# Configure credentials in .env
-AWS_ACCESS_KEY_ID=...
-AWS_SECRET_ACCESS_KEY=...
-AWS_DEFAULT_REGION=us-east-1
-AWS_S3_BUCKET=aircraft-engine-data
-DAGSHUB_TOKEN=...
-MLFLOW_TRACKING_URI=https://dagshub.com/...
-
-# Run pipeline locally
-python main.py
-
-# Or trigger from dashboard
-curl -X POST http://localhost:8000/pipeline/run
-```
+| Container Service | Base Image | Memory Limit | CPU Limit | Primary Responsibility |
+| :--- | :--- | :--- | :--- | :--- |
+| `aircraft-engine-api` | `python:3.12-slim` | **1.5 GB** | 2.0 cores | FastAPI, TensorFlow runtime, model inference |
+| `aircraft-frontend` | `nginx:alpine` | **256 MB** | 0.5 cores | Static SPA hosting & API reverse proxy |
+| `aircraft-redis` | `redis:7.2-alpine` | **256 MB** | 1.0 cores | Sub-millisecond online feature store |
+| `aircraft-solace` | `solace-pubsub-standard` | **1.5 GB** | 2.0 cores | Ingestion SMF message broker |
+| `aircraft-kafka` | `cp-kafka:7.6.0` | **1.0 GB** | 1.5 cores | Durable partitioned telemetry log |
+| `aircraft-kafka-connect` | `cp-kafka-connect:7.6.0` | **768 MB** | 1.0 cores | Solace-to-Kafka automated source connector |
+| `aircraft-flink-jobmanager` | `flink:2.0-scala_2.12` | **1.0 GB** | 1.0 cores | Flink cluster coordination & Web UI |
+| `aircraft-flink-taskmanager` | `Dockerfile.streaming` | **1.5 GB** | 2.0 cores | PyFlink operator execution & RocksDB |
+| `aircraft-producer` | `Dockerfile.streaming` | **256 MB** | 0.5 cores | 100-engine fleet telemetry simulation |
+| `aircraft-prometheus` | `prometheus:v2.50.0` | **256 MB** | 0.5 cores | Metric collection & rule evaluation |
+| `aircraft-grafana` | `grafana:10.3.0` | **256 MB** | 0.5 cores | Production visual analytics dashboard |
+| `aircraft-node-exporter` | `node-exporter:v1.7.0` | **128 MB** | 0.2 cores | Host hardware & OS metrics |
+| `aircraft-redis-exporter` | `redis_exporter:v1.58.0` | **128 MB** | 0.2 cores | Redis memory, command, & key metrics |

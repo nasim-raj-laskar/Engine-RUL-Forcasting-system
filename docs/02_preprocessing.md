@@ -1,120 +1,83 @@
-# Preprocessing Pipeline
+# Preprocessing Pipeline Specification
 
-## Overview
+## Deterministic Data Transformation & Target Formulation
 
-Raw C-MAPSS data cannot be fed directly into a model. Every step below is required and order-dependent.
+Raw C-MAPSS telemetry cannot be consumed directly by sequence architectures. The preprocessing stage enforces invariant column filtering, target clipping, global feature scaling, and group-aware partitioning without data leakage.
+
+---
+
+## 🔄 Transformation Topology
 
 ```mermaid
 flowchart TD
-    A[Raw FD001 txt files] --> B[Load Data\n26 columns · space-separated]
-    B --> C[Drop 10 Useless Sensors\ns1 s5 s6 s8 s10 s13 s15 s16 s18 s19]
-    C --> D[Compute RUL Labels\nmax_cycle − current_cycle]
-    D --> E[Clip RUL at 125\npiecewise linear target]
-    E --> F[Global MinMax Normalization\nfit on train · transform test]
-    F --> G[Group-Based Train/Val Split\n80% train engines · 20% val engines]
-    G --> H[Ready for Feature Engineering]
+    A[Raw FD001 Records\n26 Columns · Space-Delimited] --> B[Filter Zero-Variance Sensors\nDrop 10 uninformative channels]
+    B --> C[Compute Monotonic RUL\nRUL = max_cycle − current_cycle]
+    C --> D[Piecewise Linear Clipping\nSaturate RUL at 125 cycles]
+    D --> E[Global MinMax Scaling\nFit on Train only → [0, 1]]
+    E --> F[Group-Aware Partitioning\nGroupShuffleSplit by Engine Unit]
+    F --> G[Normalized Intermediate Parquet\nReady for Sliding Window Operator]
 
-    style A fill:#E8F4F8,stroke:#333,color:#000
-    style H fill:#90EE90,stroke:#333,color:#000
-    style E fill:#FFD700,stroke:#333,color:#000
+    style A fill:#1e293b,stroke:#0ea5e9,color:#fff
+    style G fill:#1e293b,stroke:#22c55e,color:#fff
 ```
 
 ---
 
-## Step 1 — Load Raw Data
+## 1. Zero-Variance Sensor Filtration
 
-Files are space-separated with no header. 26 columns: unit, cycle, 3 operational settings, 21 sensors.
+Ten sensors exhibit near-zero variance ($\sigma^2 \approx 0$) across all operating cycles, containing no degradative telemetry signal:
 
----
-
-## Step 2 — Drop Useless Sensors
-
-10 sensors have near-zero variance across all cycles — they carry no degradation signal and waste model capacity.
-
-**Dropped:** `s1, s5, s6, s8, s10, s13, s15, s16, s18, s19`
-
-**Kept (11 sensors):** `s2, s3, s4, s7, s9, s11, s12, s14, s17, s20, s21`
-
-`os3` is also dropped for FD001/FD003 (single value = 100.0 throughout).
-
----
-
-## Step 3 — Compute RUL Labels
-
-Training files run each engine to failure, so RUL is derived from the max cycle per engine:
-
-```
-RUL = max_cycle_for_engine − current_cycle
-```
-
-For the test set, RUL at the last cycle is provided in `RUL_FD001.txt`.
+* **Discarded Sensors (10)**: `s1, s5, s6, s8, s10, s13, s15, s16, s18, s19` (plus operational setting `os3` which is fixed at 100.0).
+* **Retained Telemetry Channels (11)**:
+  * `s2` (Total Temp at LPC Outlet, T24)
+  * `s3` (Total Temp at HPC Outlet, T30)
+  * `s4` (Total Temp at LPT Outlet, T50)
+  * `s7` (Total Pressure at HPC Outlet, P30)
+  * `s9` (Physical Core Speed, Nc)
+  * `s11` (Static Pressure at HPC Outlet, Ps30)
+  * `s12` (Ratio of Fuel Flow to Ps30, phi)
+  * `s14` (Corrected Core Speed, NRc)
+  * `s17` (Bleed Enthalpy, htBleed)
+  * `s20` (HPT Coolant Bleed, W31)
+  * `s21` (LPT Coolant Bleed, W32)
 
 ---
 
-## Step 4 — Clip RUL (Piecewise Linear Target)
+## 2. Piecewise Linear Target Formulation
 
-Early in engine life, RUL can be 300+ cycles. The engine shows no degradation signal that far out — predicting it accurately is impossible and irrelevant.
+Engines operate with virtually no measurable degradation during initial operational cycles. Establishing a monotonic linear regression target across early cycles forces the model to fit non-existent degradation patterns.
 
 ```mermaid
 graph LR
-    A[Cycle 1\nRUL=206] -->|Clipped to 125| B[RUL=125\nflat healthy zone]
-    B -->|Linear decrease begins| C[Cycle ~81\nRUL=125]
-    C --> D[Cycle 150\nRUL=56]
-    D --> E[Cycle 206\nRUL=0\nFAILURE]
+    A[Cycle 1\nRUL = 206] -->|Target Saturated| B[Clipped Target = 125\nHealthy Baseline Regime]
+    B -->|Degradation Inflection| C[Cycle ~81\nRUL = 125]
+    C -->|Linear Decay Phase| D[Cycle 150\nRUL = 56]
+    D -->|Failure Horizon| E[Cycle 206\nRUL = 0\nFailure State]
 
-    style A fill:#E8F4F8,stroke:#333,color:#000
-    style B fill:#FFD700,stroke:#333,color:#000
-    style E fill:#FF6B6B,stroke:#333,color:#000
+    style B fill:#1e293b,stroke:#eab308,color:#fff
+    style E fill:#1e293b,stroke:#ef4444,color:#fff
 ```
 
-**RUL clip = 125** — standard choice for FD001/FD002. The model focuses entirely on the degradation window.
+$$RUL_{\text{target}}(t) = \min\left(RUL_{\text{max}}, \max\left(0, T_{\text{fail}} - t\right)\right), \quad RUL_{\text{max}} = 125$$
 
 ---
 
-## Step 5 — Normalization
+## 3. Global MinMax Normalization
 
-**FD001 / FD003 (single operating condition):** Global MinMaxScaler fitted on training data, applied to test data. Never refit on test.
+To ensure numerical stability in recurrent gating units, feature scaling is strictly fitted on the training split and applied transitively to evaluation and streaming telemetry:
 
-**FD002 / FD004 (6 operating conditions):** Raw sensor values shift dramatically between conditions. Cluster operating conditions with KMeans first, then normalize within each cluster. Save the KMeans model and per-condition scalers — required at inference time.
+$$x_{\text{norm}}^{(i)} = \frac{x^{(i)} - \min(X_{\text{train}}^{(i)})}{\max(X_{\text{train}}^{(i)}) - \min(X_{\text{train}}^{(i)}) + \epsilon}, \quad \forall i \in \{1, \dots, 11\}$$
 
-The scaler is saved to `artifacts/data_transformation/scaler.pkl` and exported to `streaming/src/main/resources/scaler_params.csv` for the streaming consumer via `scripts/export_scaler_params.py`.
-
----
-
-## Step 6 — Train/Validation Split
-
-Split by **engine ID**, not by row. Random row splits would leak future cycles of an engine into the validation set.
-
-```mermaid
-flowchart LR
-    ALL[100 engines] --> SPLIT{GroupShuffleSplit\nby engine unit}
-    SPLIT -->|80 engines| TRAIN[Training Set\n~16,500 rows]
-    SPLIT -->|20 engines| VAL[Validation Set\n~4,100 rows]
-
-    style TRAIN fill:#90EE90,stroke:#333,color:#000
-    style VAL fill:#87CEEB,stroke:#333,color:#000
-```
+Parameters are exported to `artifacts/data_transformation/scaler.pkl` and compiled into `streaming/src/main/resources/scaler_params.csv` for stateless PyFlink worker initialization.
 
 ---
 
-## Preprocessing Checklist
+## 4. Leakage-Free Partitioning
 
-| Step | FD001 | FD002 | FD003 | FD004 |
-|------|-------|-------|-------|-------|
-| Drop constant sensors | ✅ | ✅ | ✅ | ✅ |
-| Drop os3 | ✅ | — | ✅ | — |
-| Compute RUL | ✅ | ✅ | ✅ | ✅ |
-| Clip RUL at 125 | ✅ | ✅ | ✅ | ✅ |
-| Global normalization | ✅ | — | ✅ | — |
-| Condition clustering + per-condition norm | — | ✅ | — | ✅ |
-| Group-based train/val split | ✅ | ✅ | ✅ | ✅ |
+Splits must be evaluated along the engine identity boundary rather than individual record rows. Random row-wise splitting causes temporal autocorrelation leakage where subsequent cycles of a test engine inform prior cycle training.
 
----
-
-## Output Artifacts
-
-```
-artifacts/data_transformation/
-├── processed/          train/test Parquet files
-└── scaler.pkl          MinMaxScaler (fit on train only)
-```
+| Partition | Allocation Strategy | Engine Count | Total Rows | Target Leakage Risk |
+| :--- | :--- | :--- | :--- | :--- |
+| **Train Set** | `GroupShuffleSplit` (`unit`) | 80 engines | ~16,500 | **0.0%** (Strict unit isolation) |
+| **Validation Set** | `GroupShuffleSplit` (`unit`) | 20 engines | ~4,100 | **0.0%** (Strict unit isolation) |
+| **Test Set** | Ground Truth Evaluator (`RUL_FD001.txt`) | 100 engines | 100 windows | **0.0%** (Truncated observations) |
