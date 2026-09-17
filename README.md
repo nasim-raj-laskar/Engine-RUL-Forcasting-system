@@ -1,4 +1,8 @@
-# Aircraft Engine Remaining Useful Life (RUL) Forecasting Platform
+<div align="center">
+
+# ✈️ Aircraft Engine Remaining Useful Life (RUL) Forecasting Platform
+
+*Real-time predictive maintenance, distributed telemetry streaming, and Bayesian uncertainty quantification on NASA C-MAPSS turbofan engines.*
 
 [![Python](https://img.shields.io/badge/Python-3.12-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
 [![TensorFlow](https://img.shields.io/badge/TensorFlow-2.17-FF6F00.svg?logo=tensorflow&logoColor=white)](https://www.tensorflow.org/)
@@ -14,59 +18,79 @@
 [![Docker](https://img.shields.io/badge/Docker-Compose_Stack-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-An enterprise-grade, distributed predictive maintenance and telemetry streaming platform for commercial turbofan engines. Built on NASA C-MAPSS degradation datasets, the system ingests multi-sensor telemetry across a 100-engine fleet, maintains stateful temporal windows via Apache Flink, serves real-time Remaining Useful Life (RUL) forecasts with Monte Carlo Dropout uncertainty, and detects data drift in production.
+<br/>
+
+**Fleet Size:** `100 Concurrent Turbofans` &nbsp;•&nbsp; **Stream Processing:** `Apache Flink 2.0 RocksDB` &nbsp;•&nbsp; **Test RMSE:** `14.99 Cycles` &nbsp;•&nbsp; **Feature Latency:** `Sub-Millisecond`
+
+</div>
 
 ---
 
-## 🏗️ High-Level Architecture
-![](assets/architecture.png)
----
+<h2 align="center">🏗️ High-Level Architecture</h2>
 
-## ⚡ Key Platform Capabilities
-
-* **Distributed Ingestion**: Enterprise message broker (Solace PubSub+ SMF) bridged to an Apache Kafka partitioned event log via Kafka Connect.
-* **Stateful Stream Processing**: Apache Flink 2.0 with out-of-core RocksDB state backend, tumbling 30-cycle windows, and 60s exactly-once checkpointing.
-* **Dual-Store Fabric**: Sub-millisecond online feature lookup via Redis Feature Store (`float32[330]` tensors, 1h TTL) paired with long-term Hive-partitioned S3 Parquet sinks.
-* **Deep Sequence Model**: 3-layer Gated Recurrent Unit (GRU 128 → 64 → 32) with spatial dropout, dense projection head, and target normalization.
-* **Bayesian Uncertainty**: Monte Carlo Dropout (30 stochastic forward passes at inference) estimating epistemic uncertainty and confidence bounds.
-* **Vectorized Fleet Inference**: FastAPI batches fleet-wide feature tensors into a single forward pass ($O(1)$ model invocations) streamed via WebSockets every 5s.
-* **Production Observability**: Prometheus scraping + 15-panel Grafana dashboard + Evidently AI 0.7 KS-test drift reports viewable directly inside the operations UI.
+<p align="center">
+  <img src="assets/architecture.png" alt="High-Level Architecture Diagram" width="100%" />
+</p>
 
 ---
 
-## 📊 Validated Model Benchmarks (NASA C-MAPSS FD001)
+<h2 align="center">⚡ Core Engineering Highlights</h2>
+
+* **Distributed Ingestion**: Dedicated event broker (Solace PubSub+ SMF protocol) bridges high-frequency telemetry into an Apache Kafka partitioned event log via Kafka Connect.
+* **Stateful Stream Processing**: Apache Flink 2.0 maintains keyed RocksDB operator state with tumbling/sliding 30-cycle temporal windows and 60-second exactly-once checkpointing.
+* **Dual-Sink Storage Fabric**: Sub-millisecond online feature lookup via Redis Feature Store (`float32[330]` tensors with 1-hour TTL) alongside long-term Hive-partitioned S3 Parquet sinks.
+* **Deep Sequence Model**: 3-layer Gated Recurrent Unit (GRU 128 → 64 → 32) with spatial dropout regularization, dense projection head, and normalized target formulation.
+* **Bayesian Uncertainty**: Monte Carlo Dropout (30 stochastic forward passes at inference) yields empirical variance for epistemic uncertainty quantification and confidence calibration.
+* **Vectorized Fleet Inference**: FastAPI batches fleet-wide feature tensors into a single forward pass ($O(1)$ model invocations) broadcast via WebSockets on a 5-second tick loop.
+* **Live Observability**: Prometheus scraping with 9 custom gauges + auto-provisioned 15-panel Grafana dashboard + Evidently AI 0.7 KS-test drift reports embedded in the UI.
+
+---
+
+<h2 align="center">📊 Validated Model Benchmarks (NASA C-MAPSS FD001)</h2>
 
 Evaluated against the 100-engine test set with piece-wise linear target clipping ($RUL_{\text{max}} = 125$ cycles):
 
+<div align="center">
+
 | Metric | Measured Value | Target Gate | Production Status |
-| :--- | :--- | :--- | :--- |
+| :--- | :---: | :---: | :---: |
 | **Root Mean Squared Error (RMSE)** | **14.99 cycles** | $< 20.0$ cycles | ✅ **PASS** |
-| **NASA Asymmetric Score** | **449.6** | $< 2000.0$ | ✅ **PASS** (Strict penalty on late predictions) |
+| **NASA Asymmetric Penalty Score** | **449.6** | $< 2000.0$ | ✅ **PASS** |
 | **Critical Regime Precision** | **91.7%** | $> 80.0\%$ | ✅ **PASS** |
 | **Critical Regime Recall** | **88.0%** | $> 75.0\%$ | ✅ **PASS** |
 | **Critical F1 Score** | **0.898** | $> 0.80$ | ✅ **PASS** |
 | **Classification Accuracy** | **95.0%** | $> 80.0\%$ | ✅ **PASS** |
 | **Weighted F1 Score** | **0.950** | $> 0.80$ | ✅ **PASS** |
 
-*(Detailed mathematical formulations for the piecewise targets, sample weights, and NASA asymmetric penalty are documented in [docs/04_model_training.md](docs/04_model_training.md).)*
+</div>
+
+> ℹ️ *Mathematical formulations for the piecewise degradation targets, critical-zone sample weights, and the NASA asymmetric penalty function are detailed in [docs/04_model_training.md](docs/04_model_training.md).*
 
 ---
 
-## 🖥️ Operations & Observability
+<h2 align="center">🖥️ Operations & Observability</h2>
 
-### Fleet Command Center (`/`)
-Live operations console showing active fleet size, risk distributions, critical alerts, and individual engine telemetry.
+<h3 align="center">🎮 Fleet Command Center (<code>/</code>)</h3>
+<p align="center">
+  <em>Real-time operations cockpit displaying active fleet health, risk classification distributions, urgent alerts, and telemetry feeds.</em>
+</p>
+<p align="center">
+  <img src="assets/fleetpage.png" alt="Fleet Command Center" width="95%" />
+</p>
 
-![Fleet Command Center](assets/fleetpage.png)
+<br/>
 
-### Grafana Production Monitoring (`:3000`)
-Real-time infrastructure and model metrics: prediction throughput, latency quantiles ($p_{50}, p_{95}, p_{99}$), critical engine counts, and system resources.
-
-![Grafana Dashboard](assets/grafana.png)
+<h3 align="center">📈 Production Observability Suite (<code>:3000</code>)</h3>
+<p align="center">
+  <em>Infrastructure & model metrics: prediction throughput, latency quantiles (p50/p95/p99), critical engine counts, and Redis memory telemetry.</em>
+</p>
+<p align="center">
+  <img src="assets/grafana.png" alt="Grafana Dashboard" width="95%" />
+</p>
 
 ---
 
-## 🚀 Quick Start
+<h2 align="center">🚀 Quick Start</h2>
 
 ### 1. Launch Core Stack (FastAPI + Redis + Producer + Consumer + Dashboard)
 ```bash
@@ -89,28 +113,32 @@ docker compose --profile streaming up -d
 # Add Prometheus, Grafana, and Exporters
 docker compose --profile monitoring up -d
 
-# Launch all 13 services
+# Launch all 13 services together
 docker compose --profile streaming --profile monitoring up -d
 ```
 
-### 3. Service Endpoints
+### 3. Service Access Matrix
 
-| Service | URL | Credentials | Profile |
-| :--- | :--- | :--- | :--- |
-| **Fleet Dashboard** | `http://localhost:5173` | Public | core |
-| **Inference API (Swagger)** | `http://localhost:8000/docs` | Public | core |
-| **Grafana Dashboards** | `http://localhost:3000` | `admin` / `admin` | monitoring |
-| **Prometheus Telemetry** | `http://localhost:9090` | Public | monitoring |
-| **Flink Web UI** | `http://localhost:8082` | Public | streaming |
-| **Solace Broker Manager** | `http://localhost:8080` | `admin` / `admin` | streaming |
-| **Kafka Connect REST** | `http://localhost:8083` | Public | streaming |
+<div align="center">
+
+| Service | Endpoint | Access Credentials | Compose Profile |
+| :--- | :--- | :---: | :---: |
+| **Fleet Operations Dashboard** | `http://localhost:5173` | Public | `core` |
+| **Inference API (Swagger)** | `http://localhost:8000/docs` | Public | `core` |
+| **Grafana Monitoring Suite** | `http://localhost:3000` | `admin` / `admin` | `monitoring` |
+| **Prometheus Raw Metrics** | `http://localhost:9090` | Public | `monitoring` |
+| **Apache Flink Web UI** | `http://localhost:8082` | Public | `streaming` |
+| **Solace Broker Management** | `http://localhost:8080` | `admin` / `admin` | `streaming` |
+| **Kafka Connect REST API** | `http://localhost:8083` | Public | `streaming` |
+
+</div>
 
 ---
 
-## 📖 Documentation Modules & Architectural Deep Dives
+<h2 align="center">📖 Documentation & Architectural Deep Dives</h2>
 
 <details open>
-<summary><b>Click to expand/collapse module specifications</b></summary>
+<summary><b>Click to expand / collapse module specifications</b></summary>
 <br>
 
 | Module | Document | Description |
@@ -131,5 +159,10 @@ docker compose --profile streaming --profile monitoring up -d
 
 ---
 
-## 📄 License
-This project is licensed under the [MIT License](LICENSE).
+<h2 align="center">📄 License</h2>
+
+<div align="center">
+
+Released under the [MIT License](LICENSE). Built for high-reliability predictive maintenance research and deployments.
+
+</div>
