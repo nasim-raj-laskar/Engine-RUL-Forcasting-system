@@ -101,6 +101,11 @@ flowchart TD
 | **Critical Regime Recall** | $> 75.0\%$ | **88.0%** | **PASS** |
 | **Critical F1 Score** | $> 0.80$ | **0.898** | **PASS** |
 
+#### NASA Asymmetric Scoring Function
+Penalizes late predictions (where $\hat{y} > y$, risking unpredicted engine failure) exponentially more than early predictions:
+
+$$d_i = \hat{y}_i - y_i, \qquad S = \sum_{i=1}^{N} h(d_i), \quad h(d_i) = \begin{cases} e^{-d_i/13} - 1, & d_i < 0 \text{ (Early prediction)} \\ e^{d_i/10} - 1, & d_i \ge 0 \text{ (Late prediction)} \end{cases}$$
+
 ---
 
 ## 📊 Diagnostic Visualizations
