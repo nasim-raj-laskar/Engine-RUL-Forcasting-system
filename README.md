@@ -74,7 +74,8 @@ git clone https://github.com/nasim-raj-laskar/Real-Time-Aircraft-Engine-Predicti
 cd Real-Time-Aircraft-Engine-Predictive-Maintenance-System
 
 cp .env.example .env
-# Fill in AWS & MLflow credentials
+cp solace.env.example streaming/config/solace.env
+# Fill in AWS, MLflow & broker credentials
 
 # Core services (~2.4GB RAM)
 docker compose up -d
