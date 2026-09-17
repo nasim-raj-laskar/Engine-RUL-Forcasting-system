@@ -52,15 +52,15 @@ Evaluated against the 100-engine test set with piece-wise linear target clipping
 
 <div align="center">
 
-| Metric | Measured Value | Target Gate | Production Status |
-| :--- | :---: | :---: | :---: |
-| **Root Mean Squared Error (RMSE)** | **14.99 cycles** | $< 20.0$ cycles | ✅ **PASS** |
-| **NASA Asymmetric Penalty Score** | **449.6** | $< 2000.0$ | ✅ **PASS** |
-| **Critical Regime Precision** | **91.7%** | $> 80.0\%$ | ✅ **PASS** |
-| **Critical Regime Recall** | **88.0%** | $> 75.0\%$ | ✅ **PASS** |
-| **Critical F1 Score** | **0.898** | $> 0.80$ | ✅ **PASS** |
-| **Classification Accuracy** | **95.0%** | $> 80.0\%$ | ✅ **PASS** |
-| **Weighted F1 Score** | **0.950** | $> 0.80$ | ✅ **PASS** |
+| Metric | Measured Value | Target Gate  |
+| :--- | :---: | :---: |
+| **Root Mean Squared Error (RMSE)** | **14.99 cycles** | $< 20.0$ cycles|
+| **NASA Asymmetric Penalty Score** | **449.6** | $< 2000.0$  |
+| **Critical Regime Precision** | **91.7%** | $> 80.0\%$ |
+| **Critical Regime Recall** | **88.0%** | $> 75.0\%$  |
+| **Critical F1 Score** | **0.898** | $> 0.80$ |
+| **Classification Accuracy** | **95.0%** | $> 80.0\%$ |
+| **Weighted F1 Score** | **0.950** | $> 0.80$  |
 
 </div>
 
@@ -80,7 +80,7 @@ Evaluated against the 100-engine test set with piece-wise linear target clipping
 
 <br/>
 
-<h3 align="center">📈 Production Observability Suite (<code>:3000</code>)</h3>
+<h3 align="center">📈 Observability Suite (<code>:3000</code>)</h3>
 <p align="center">
   <em>Infrastructure & model metrics: prediction throughput, latency quantiles (p50/p95/p99), critical engine counts, and Redis memory telemetry.</em>
 </p>
