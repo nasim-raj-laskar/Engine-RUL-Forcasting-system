@@ -65,12 +65,12 @@ Custom metrics instrumented within `src/inference/metrics.py` and exposed at `GE
 
 Rules defined within `monitoring/prometheus/alerting_rules.yml`:
 
-| Alert Identifier | Threshold Condition | Evaluation Duration | Severity Level |
+| Alert Identifier | Threshold Expression | Evaluation Duration | Severity Level |
 | :--- | :--- | :--- | :--- |
 | `CriticalEngineDetected` | `rate(critical_engines_total[5m]) > 0` | 1 minute | **CRITICAL** |
-| `HighPredictionLatency` | $p_{95}(\text{prediction\_latency}) > 100\text{ms}$ | 5 minutes | **WARNING** |
-| `HighInferenceErrorRate` | $\text{rate}(\text{prediction\_errors}) > 0.01 / \text{sec}$ | 5 minutes | **WARNING** |
-| `RedisMemoryExhaustion` | $\text{Redis Memory Usage} > 80\%$ | 5 minutes | **WARNING** |
+| `HighPredictionLatency` | `p95(prediction_latency) > 100ms` | 5 minutes | **WARNING** |
+| `HighPredictionErrorRate` | `rate(prediction_errors_total[5m]) > 0.01/s` | 5 minutes | **WARNING** |
+| `RedisHighMemoryUsage` | `redis_memory_used / redis_memory_max > 80%` | 5 minutes | **WARNING** |
 | `InferenceEngineDown` | `up{job="inference-api"} == 0` | 1 minute | **CRITICAL** |
 
 ---
