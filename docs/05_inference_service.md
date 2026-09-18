@@ -16,24 +16,20 @@ sequenceDiagram
     participant Redis as Redis Feature Store
     participant Engine as TensorFlow GRU Engine
 
-    rect rgb(240, 249, 255)
-    Note over Client,Engine: Online Stream Pathway (Sub-millisecond)
+    Note over Client,Engine: Pathway 1 — Online Stream Ingestion (Sub-millisecond)
     Client->>API: GET /predict/engine/{id}
     API->>Redis: GET engine:{id}:features (330 float32)
     Redis-->>API: Binary Feature Tensor
     API->>Engine: MC Dropout Inference (30 Passes)
     Engine-->>API: Mean RUL + Epistemic Uncertainty
     API-->>Client: {rul, failure_risk, risk_level, confidence}
-    end
 
-    rect rgb(254, 242, 242)
-    Note over Client,Engine: Direct Sensor Payload Pathway
+    Note over Client,Engine: Pathway 2 — Direct Sensor Payload Ingestion
     Client->>API: POST /predict/raw {raw_sensor_dict}
     API->>API: InferencePreprocessor (Global MinMax Transform)
     API->>Engine: Forward Pass
     Engine-->>API: Inference Output
     API-->>Client: {rul, failure_risk, risk_level, confidence}
-    end
 ```
 
 ---
