@@ -1,9 +1,5 @@
 services:
-
-  # ═══════════════════════════════════════════════════════════════════════════
   #  CORE SERVICES  (always start — no profile needed)
-  # ═══════════════════════════════════════════════════════════════════════════
-
   #  Inference API
   inference-api:
     build:
@@ -148,11 +144,8 @@ services:
     networks:
       - aircraft-network
 
-  # ═══════════════════════════════════════════════════════════════════════════
   #  STREAMING PROFILE  (docker compose --profile streaming up)
   #  Full Kafka-based pipeline: Solace → Kafka → PyFlink → Redis
-  # ═══════════════════════════════════════════════════════════════════════════
-
   #  Solace PubSub+ (event broker — ingestion boundary)
   solace:
     image: solace/solace-pubsub-standard:latest
@@ -324,7 +317,7 @@ services:
     networks:
       - aircraft-network
 
-  #  Kafka Connector Registrar (one-shot — registers Solace connector)
+  #  Kafka Connector Registrar (registers Solace connector)
   kafka-connector-registrar:
     image: curlimages/curl:latest
     container_name: aircraft-kafka-connector-registrar
@@ -476,10 +469,7 @@ services:
     networks:
       - aircraft-network
 
-  # ═══════════════════════════════════════════════════════════════════════════
-  #  MONITORING PROFILE  (docker compose --profile monitoring up)
-  # ═══════════════════════════════════════════════════════════════════════════
-
+  #  MONITORING PROFILE  (docker compose --profile monitoring up) 
   node-exporter:
     image: prom/node-exporter:latest
     container_name: aircraft-node-exporter
